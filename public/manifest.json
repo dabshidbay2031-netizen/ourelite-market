@@ -1,0 +1,17 @@
+{
+  "name": "Mogarenta Shop",
+  "short_name": "Mogarenta",
+  "description": "E-commerce & Point of Sale",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F1F5F9",
+  "theme_color": "#4F46E5",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "shortcuts": [
+    { "name": "Explore", "url": "/",    "description": "Browse products" },
+    { "name": "POS",     "url": "/pos", "description": "Point of Sale" }
+  ]
+}

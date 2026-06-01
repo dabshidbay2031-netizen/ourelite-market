@@ -1,0 +1,23 @@
+# Next.js
+.next/
+out/
+build/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Env files (never commit secrets)
+.env.local
+.env*.local
+
+# Editor
+.DS_Store
+*.pem
+.vscode/
+.idea/
+
+# Misc
+*.tsbuildinfo
+graphify-out/
+generate-test-doc.js
