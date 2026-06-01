@@ -1,53 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { errMsg } from '@/lib/apiHelpers';
-import type { ChatUser } from '@/lib/types';
-
-/** Resolve a user ID to ChatUser — checks suppliers first, then profiles */
-async function resolveChatUser(uid: string): Promise<ChatUser> {
-  // Try supplier (business)
-  try {
-    const { data } = await getSupabaseAdmin()
-      .from('suppliers')
-      .select('id,name,icon,verified,bio,location,categories,contact_numbers')
-      .eq('auth_user_id', uid)
-      .maybeSingle();
-    if (data) {
-      return {
-        id:             uid,
-        name:           String(data.name),
-        avatar:         String(data.icon ?? '🏭'),
-        type:           'business',
-        verified:       Boolean(data.verified),
-        bio:            String(data.bio ?? ''),
-        location:       String(data.location ?? ''),
-        categories:     (data.categories as string[]) ?? [],
-        contactNumbers: (data.contact_numbers as string[]) ?? [],
-      };
-    }
-  } catch { /* ignore */ }
-
-  // Try profile (user)
-  try {
-    const { data } = await getSupabaseAdmin()
-      .from('profiles')
-      .select('id,full_name,avatar,verified,phone')
-      .eq('id', uid)
-      .maybeSingle();
-    if (data) {
-      return {
-        id:       uid,
-        name:     String(data.full_name || 'User'),
-        avatar:   String(data.avatar ?? '👤'),
-        type:     'user',
-        verified: Boolean((data as Record<string, unknown>).verified ?? false),
-      };
-    }
-  } catch { /* ignore */ }
-
-  // Fallback
-  return { id: uid, name: 'Unknown', avatar: '👤', type: 'user', verified: false };
-}
+import { resolveChatUser } from '@/lib/chatHelpers';
 
 /**
  * GET /api/conversations/[id]?viewerId=X
@@ -88,6 +42,3 @@ export async function GET(
     return NextResponse.json({ error: errMsg(e) }, { status: 500 });
   }
 }
-
-// Export resolveChatUser for use in other routes
-export { resolveChatUser };
