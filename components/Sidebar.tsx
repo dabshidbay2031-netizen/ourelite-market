@@ -1,21 +1,22 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useApp }  from '@/context/AppContext';
+import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
+import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
-import { useView } from '@/context/ViewContext';
 
 export default function Sidebar() {
-  const { viewPath, navigate } = useView();
+  const pathname = usePathname();
+  const router   = useRouter();
   const { unreadCount, cartCount, setCartOpen } = useApp();
   const { user } = useAuth();
   const notifs    = unreadCount();
   const cartItems = cartCount();
-  const pathname  = viewPath; // use ViewContext path for active-state highlighting
-  
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  
+
   useEffect(() => {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 960);
@@ -24,7 +25,7 @@ export default function Sidebar() {
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
-  
+
   useEffect(() => {
     setSidebarOpen(false);
   }, [pathname]);
@@ -157,7 +158,6 @@ export default function Sidebar() {
 
   return (
     <>
-      {/* Mobile hamburger button */}
       {isMobile && (
         <button
           className="sidebar-toggle"
@@ -178,8 +178,7 @@ export default function Sidebar() {
           )}
         </button>
       )}
-      
-      {/* Sidebar overlay for mobile */}
+
       {isMobile && sidebarOpen && (
         <div
           className="sidebar-overlay"
@@ -187,12 +186,10 @@ export default function Sidebar() {
           style={{ position: 'fixed', inset: 0, zIndex: 250, background: 'rgba(0,0,0,.3)' }}
         />
       )}
-      
+
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-        {/* Logo + search shortcut */}
         <div className="sidebar-logo">
-          {/* Instant navigate — no server round-trip */}
-          <button className="sidebar-logo-link" style={{ background:'none', border:'none', cursor:'pointer', display:'flex', alignItems:'center', gap:8 }} onClick={() => navigate('/')}>
+          <Link href="/" className="sidebar-logo-link">
             <div className="sidebar-logo-icon">
               <svg viewBox="0 0 28 28" fill="none">
                 <rect width="28" height="28" rx="8" fill="currentColor" opacity=".15"/>
@@ -200,36 +197,29 @@ export default function Sidebar() {
               </svg>
             </div>
             <span className="sidebar-logo-text">Mogarenta</span>
-          </button>
-          <button className="sidebar-search-btn" onClick={() => navigate('/search')} title="Search (/)">
+          </Link>
+          <button className="sidebar-search-btn" onClick={() => router.push('/search')} title="Search (/)">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
               <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
             </svg>
           </button>
         </div>
 
-        {/* Nav items — all instant, no compilation */}
         <nav className="sidebar-nav">
           {items.map(item => {
             const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
             return (
-              <button
-                key={item.href}
-                className={`sidebar-item ${isActive ? 'active' : ''}`}
-                onClick={() => { navigate(item.href); setSidebarOpen(false); }}
-                style={{ width:'100%', textAlign:'left', background:'none', border:'none', cursor:'pointer' }}
-              >
+              <Link key={item.href} href={item.href} className={`sidebar-item ${isActive ? 'active' : ''}`}>
                 <span className="sidebar-item-icon">{item.icon}</span>
                 <span className="sidebar-item-label">{item.label}</span>
                 {item.badge != null && item.badge > 0 && (
                   <span className="sidebar-badge">{item.badge}</span>
                 )}
-              </button>
+              </Link>
             );
           })}
         </nav>
 
-        {/* Cart button */}
         <div className="sidebar-footer">
           <button className="sidebar-item sidebar-cart-btn" onClick={() => setCartOpen(true)}>
             <span className="sidebar-item-icon">

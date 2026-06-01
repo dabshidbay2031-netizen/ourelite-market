@@ -1,11 +1,12 @@
 'use client';
 
-import { useApp }  from '@/context/AppContext';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
-import { useView } from '@/context/ViewContext';
 
 export default function BottomNav() {
-  const { viewPath, navigate } = useView();
+  const pathname = usePathname();
   const { unreadCount } = useApp();
   const { user } = useAuth();
   const notifs = unreadCount();
@@ -90,20 +91,15 @@ export default function BottomNav() {
   return (
     <nav className="bottom-nav">
       {items.map(item => {
-        const isActive = item.href === '/' ? viewPath === '/' : viewPath.startsWith(item.href);
+        const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
         return (
-          <button
-            key={item.href}
-            className={`nav-item ${isActive ? 'active' : ''}`}
-            onClick={() => navigate(item.href)}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-          >
+          <Link key={item.href} href={item.href} className={`nav-item ${isActive ? 'active' : ''}`}>
             {item.icon}
             {item.badge != null && (
               <span className="badge nav-badge">{item.badge}</span>
             )}
             <span>{item.label}</span>
-          </button>
+          </Link>
         );
       })}
     </nav>

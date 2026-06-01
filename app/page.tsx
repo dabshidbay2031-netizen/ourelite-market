@@ -1,45 +1,14 @@
 'use client';
 
-import { useState, useMemo, lazy, Suspense } from 'react';
+import { useState, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import ProductCard from '@/components/ProductCard';
 import { useApp } from '@/context/AppContext';
 import { CATEGORIES } from '@/lib/data';
-import { useView } from '@/context/ViewContext';
-
-/* AppShell is loaded lazily — it only activates when the user navigates
-   away from '/'.  First navigation to any page takes ~1s to load the
-   component JS; every visit after that is instant.                       */
-const AppShell = lazy(() => import('@/components/AppShell'));
-
-function AppShellOverlay() {
-  const { viewPath } = useView();
-  if (viewPath === '/' || viewPath === '') return null;
-
-  return (
-    /* Full-screen overlay — sits on top of ExplorePage, prevents re-mount
-       of ExplorePage when returning to '/' (it's just hidden). */
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 10,
-        background: 'var(--bg)',
-        overflowY: 'auto',
-      }}
-    >
-      <Suspense fallback={
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', flexDirection:'column', gap:12 }}>
-          <div className="spinner" style={{ width:28, height:28 }} />
-          <span style={{ fontSize:'.82rem', color:'var(--text-muted)' }}>Loading…</span>
-        </div>
-      }>
-        <AppShell />
-      </Suspense>
-    </div>
-  );
-}
 
 export default function ExplorePage() {
-  const { navigate } = useView();
+  const router = useRouter();
   const { state, setCartOpen, addToCart, toggleWishlist } = useApp();
   const { products, loading } = state;
   const [search, setSearch] = useState('');
@@ -73,7 +42,6 @@ export default function ExplorePage() {
   [products]);
 
   return (
-    <>
     <div className="page-anim">
       <Header searchQuery={search} onSearch={setSearch} />
 
@@ -125,7 +93,7 @@ export default function ExplorePage() {
                 key={p.id}
                 className="similar-card"
                 style={{ flexShrink: 0, width: 140 }}
-                onClick={() => navigate(`/product/${p.id}`)}
+                onClick={() => router.push(`/product/${p.id}`)}
               >
                 <div className="similar-img">{p.icon}</div>
                 <div className="similar-body">
@@ -184,8 +152,5 @@ export default function ExplorePage() {
         </div>
       )}
     </div>
-    {/* Client-side router overlay — renders all other pages instantly */}
-    <AppShellOverlay />
-    </>
   );
 }
