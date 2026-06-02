@@ -340,6 +340,17 @@ ALTER PUBLICATION supabase_realtime ADD TABLE conversations;
 
 
 -- ============================================================
+-- 5b. SCHEMA ADDITIONS (run-safe with IF NOT EXISTS guards)
+-- ============================================================
+
+-- Let businesses hide their exact stock count from public customers
+ALTER TABLE suppliers         ADD COLUMN IF NOT EXISTS hide_stock BOOLEAN NOT NULL DEFAULT false;
+
+-- Minimum order quantity per business-product listing
+ALTER TABLE business_products ADD COLUMN IF NOT EXISTS moq INTEGER NOT NULL DEFAULT 1;
+
+
+-- ============================================================
 -- 6. SUPABASE STORAGE  (chat images + product photos)
 -- ============================================================
 

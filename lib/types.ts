@@ -41,6 +41,7 @@ export interface BusinessProduct {
   product?:    Product; // populated on GET
   customPrice: number;
   stockQty:    number;
+  moq:         number;  // minimum order quantity
   isActive:    boolean;
   createdAt:   string;
 }
@@ -63,6 +64,7 @@ export interface Supplier {
   bio?:           string;
   contactNumbers?:string[];
   authUserId?:    string;
+  hideStock?:     boolean;  // hide stock count from public customers
 }
 
 export interface CartItem {

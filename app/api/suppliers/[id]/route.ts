@@ -22,6 +22,7 @@ function mapSupplier(s: Record<string, unknown>) {
     bio: s.bio ?? '',
     contactNumbers: (s.contact_numbers as string[]) ?? [],
     authUserId: s.auth_user_id ?? null,
+    hideStock: Boolean(s.hide_stock ?? false),
   };
 }
 
@@ -57,6 +58,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (body.verified      !== undefined) updates.verified      = body.verified;
   if (body.badge         !== undefined) updates.badge         = body.badge;
   if (body.slug          !== undefined) updates.slug          = body.slug ?? null;
+  if (body.hideStock     !== undefined) updates.hide_stock    = Boolean(body.hideStock);
 
   const { data, error } = await getSupabaseAdmin()
     .from('suppliers').update(updates).eq('id', id).select().single();

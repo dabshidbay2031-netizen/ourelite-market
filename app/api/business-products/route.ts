@@ -32,6 +32,7 @@ function mapBP(row: Record<string, unknown>) {
     productId:   row.product_id,
     customPrice: row.custom_price,
     stockQty:    row.stock_qty,
+    moq:         (row.moq as number) ?? 1,
     isActive:    row.is_active,
     createdAt:   row.created_at,
     product:     row.products
@@ -67,7 +68,7 @@ export async function GET(req: Request) {
 /** POST /api/business-products — claim a product into a business's store */
 export async function POST(req: Request) {
   const body = await req.json();
-  const { supplierId, productId, customPrice, stockQty = 0 } = body;
+  const { supplierId, productId, customPrice, stockQty = 0, moq = 1 } = body;
 
   if (!supplierId || !productId || customPrice === undefined) {
     return NextResponse.json(
@@ -84,6 +85,7 @@ export async function POST(req: Request) {
         product_id:   parseInt(String(productId),  10),
         custom_price: parseFloat(String(customPrice)),
         stock_qty:    parseInt(String(stockQty),    10),
+        moq:          Math.max(1, parseInt(String(moq), 10)),
         is_active:    true,
       }, { onConflict: 'supplier_id,product_id' })
       .select('*, products(*)')

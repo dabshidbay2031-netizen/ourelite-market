@@ -1,0 +1,189 @@
+'use client';
+
+import { useRef } from 'react';
+import type { CartItem, Product } from '@/lib/types';
+
+interface ReceiptProps {
+  orderId:       string;
+  businessName?: string;
+  businessIcon?: string;
+  customerName:  string;
+  paymentMethod: string;
+  items:         CartItem[];
+  products:      Product[];
+  subtotal:      number;
+  discount:      number;
+  total:         number;
+  onClose:       () => void;
+}
+
+export default function Receipt({
+  orderId, businessName, businessIcon, customerName,
+  paymentMethod, items, products, subtotal, discount, total, onClose,
+}: ReceiptProps) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  function handlePrint() {
+    const content = ref.current?.innerHTML ?? '';
+    const win = window.open('', '_blank', 'width=400,height=700');
+    if (!win) return;
+    win.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8"/>
+        <title>Receipt ${orderId}</title>
+        <style>
+          * { margin:0; padding:0; box-sizing:border-box; }
+          body { font-family: 'Courier New', monospace; font-size: 13px; color:#000; background:#fff; padding:16px; }
+          .receipt { max-width: 320px; margin: 0 auto; }
+          .r-head { text-align:center; padding-bottom:12px; border-bottom:2px dashed #000; margin-bottom:12px; }
+          .r-biz-icon { font-size:28px; }
+          .r-biz-name { font-size:16px; font-weight:700; margin-top:4px; }
+          .r-title { font-size:11px; letter-spacing:2px; text-transform:uppercase; color:#555; margin-top:2px; }
+          .r-meta { font-size:11px; margin:8px 0 0; color:#555; }
+          .r-items { padding:12px 0; border-bottom:2px dashed #000; }
+          .r-item { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px; }
+          .r-item-left { flex:1; }
+          .r-item-name { font-weight:600; }
+          .r-item-qty { font-size:11px; color:#555; }
+          .r-item-price { font-weight:600; white-space:nowrap; margin-left:8px; }
+          .r-totals { padding:12px 0; border-bottom:2px dashed #000; }
+          .r-row { display:flex; justify-content:space-between; margin-bottom:4px; }
+          .r-row.grand { font-size:15px; font-weight:700; border-top:1px solid #000; padding-top:6px; margin-top:6px; }
+          .r-row.discount { color:#444; }
+          .r-footer { text-align:center; font-size:11px; color:#555; margin-top:12px; }
+          .r-pay-badge { display:inline-block; border:1px solid #000; border-radius:4px; padding:2px 8px; font-size:10px; font-weight:700; letter-spacing:1px; text-transform:uppercase; margin-top:4px; }
+          @media print {
+            body { padding:0; }
+            @page { margin:8mm; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="receipt">${content}</div>
+        <script>window.onload = () => { window.print(); window.onafterprint = () => window.close(); }</script>
+      </body>
+      </html>
+    `);
+    win.document.close();
+  }
+
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric' });
+  const timeStr = now.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' });
+  const pmLabel = paymentMethod === 'waafi' ? 'Waafi Pay' : paymentMethod === 'cash' ? 'Cash' : 'Card';
+
+  return (
+    <>
+      {/* Overlay */}
+      <div
+        style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.55)', zIndex:800, backdropFilter:'blur(2px)' }}
+        onClick={onClose}
+      />
+
+      {/* Modal */}
+      <div style={{
+        position:'fixed', inset:0, zIndex:801, display:'flex', alignItems:'center', justifyContent:'center',
+        padding: '16px',
+      }}>
+        <div style={{
+          background:'#fff', borderRadius:16, padding:0, width:'100%', maxWidth:380,
+          boxShadow:'0 20px 60px rgba(0,0,0,.3)', maxHeight:'90vh', display:'flex', flexDirection:'column',
+        }}>
+          {/* Header */}
+          <div style={{ padding:'16px 20px 12px', borderBottom:'1px solid #eee', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <span style={{ fontWeight:700, fontSize:'1rem', color:'#111' }}>🧾 Receipt</span>
+            <button onClick={onClose} style={{ background:'none', border:'none', fontSize:18, cursor:'pointer', color:'#999', padding:'0 4px' }}>✕</button>
+          </div>
+
+          {/* Scrollable content */}
+          <div style={{ overflowY:'auto', padding:'20px', flex:1 }}>
+            {/* Receipt preview */}
+            <div ref={ref} style={{ fontFamily:"'Courier New', monospace", fontSize:13, color:'#000', lineHeight:1.5 }}>
+
+              {/* Business header */}
+              <div className="r-head" style={{ textAlign:'center', paddingBottom:12, borderBottom:'2px dashed #000', marginBottom:12 }}>
+                {businessIcon && <div style={{ fontSize:28 }}>{businessIcon}</div>}
+                <div style={{ fontSize:16, fontWeight:700, marginTop:4 }}>{businessName || 'Mogarenta'}</div>
+                <div style={{ fontSize:11, letterSpacing:2, textTransform:'uppercase', color:'#555', marginTop:2 }}>Receipt</div>
+                <div style={{ fontSize:11, marginTop:8, color:'#555' }}>
+                  {dateStr} · {timeStr}
+                </div>
+                <div style={{ fontSize:11, color:'#555' }}>Order: <strong>{orderId}</strong></div>
+                {customerName && <div style={{ fontSize:11, color:'#555' }}>Customer: {customerName}</div>}
+              </div>
+
+              {/* Items */}
+              <div style={{ padding:'12px 0', borderBottom:'2px dashed #000' }}>
+                {items.map(item => {
+                  const p = products.find(x => x.id === item.id);
+                  if (!p) return null;
+                  return (
+                    <div key={item.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:6 }}>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontWeight:600 }}>{p.name}</div>
+                        <div style={{ fontSize:11, color:'#555' }}>
+                          {item.qty} × ${p.price.toFixed(2)}
+                        </div>
+                      </div>
+                      <div style={{ fontWeight:600, whiteSpace:'nowrap', marginLeft:8 }}>
+                        ${(p.price * item.qty).toFixed(2)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Totals */}
+              <div style={{ padding:'12px 0', borderBottom:'2px dashed #000' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
+                  <span>Subtotal</span><span>${subtotal.toFixed(2)}</span>
+                </div>
+                {discount > 0 && (
+                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4, color:'#444' }}>
+                    <span>Discount</span><span>-${discount.toFixed(2)}</span>
+                  </div>
+                )}
+                <div style={{ display:'flex', justifyContent:'space-between', fontSize:15, fontWeight:700, borderTop:'1px solid #000', paddingTop:6, marginTop:6 }}>
+                  <span>TOTAL</span><span>${total.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div style={{ textAlign:'center', fontSize:11, color:'#555', marginTop:12 }}>
+                <div style={{ display:'inline-block', border:'1px solid #000', borderRadius:4, padding:'2px 8px', fontSize:10, fontWeight:700, letterSpacing:1, textTransform:'uppercase', marginBottom:8 }}>
+                  {pmLabel}
+                </div>
+                <div>Thank you for your purchase!</div>
+                <div style={{ marginTop:4, opacity:0.6 }}>Powered by Mogarenta</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Print button */}
+          <div style={{ padding:'16px 20px', borderTop:'1px solid #eee', display:'flex', gap:10 }}>
+            <button
+              onClick={handlePrint}
+              style={{
+                flex:1, background:'#4F46E5', color:'#fff', border:'none', borderRadius:10,
+                padding:'12px 0', fontWeight:700, fontSize:'0.95rem', cursor:'pointer',
+              }}
+            >
+              🖨️ Print Receipt
+            </button>
+            <button
+              onClick={onClose}
+              style={{
+                background:'#f3f4f6', color:'#374151', border:'none', borderRadius:10,
+                padding:'12px 16px', fontWeight:600, fontSize:'0.9rem', cursor:'pointer',
+              }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}

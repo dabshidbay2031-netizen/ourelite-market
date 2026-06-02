@@ -3,23 +3,43 @@
 import { useState, useMemo } from 'react';
 import Header from '@/components/Header';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { CATEGORIES } from '@/lib/data';
 
 export default function POSPage() {
   const { state, addToCart, cartCount, setCartOpen, getStock } = useApp();
-  const { products, loading } = state;
-  const [search, setSearch] = useState('');
+  const { user } = useAuth();
+  const { products, suppliers, loading } = state;
+
+  const [search, setSearch]               = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
+  const [myProductsOnly, setMyProductsOnly] = useState(false);
+
+  // Find current supplier
+  const currentSupplier = useMemo(
+    () => suppliers.find(s => s.authUserId === user?.id) ?? null,
+    [suppliers, user]
+  );
 
   const filtered = useMemo(() => {
     let list = products;
+
+    // "My Products" filter — show only this supplier's products
+    if (myProductsOnly && currentSupplier) {
+      list = list.filter(p => p.supplierId === currentSupplier.id);
+    }
+
     if (activeCategory !== 'all') list = list.filter(p => p.category === activeCategory);
     if (search.trim()) {
       const q = search.toLowerCase();
-      list = list.filter(p => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q));
+      list = list.filter(p =>
+        p.name.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q)  ||
+        ((p as typeof p & { barcode?: string }).barcode ?? '').includes(q)
+      );
     }
     return list;
-  }, [products, search, activeCategory]);
+  }, [products, search, activeCategory, myProductsOnly, currentSupplier]);
 
   const count = cartCount();
 
@@ -29,12 +49,33 @@ export default function POSPage() {
 
       <div className="page-title-bar">
         <span className="page-title">🖥️ Point of Sale</span>
+        {/* My Products toggle — only shown when logged-in user has a supplier account */}
+        {currentSupplier && (
+          <button
+            className={`btn btn-sm ${myProductsOnly ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setMyProductsOnly(v => !v)}
+            title={myProductsOnly ? 'Showing my products only' : 'Showing all products'}
+          >
+            {myProductsOnly ? `🏪 ${currentSupplier.icon} Mine` : '🌐 All'}
+          </button>
+        )}
       </div>
+
+      {myProductsOnly && currentSupplier && (
+        <div style={{
+          padding: '6px 16px', background: 'var(--primary-light, #EEF2FF)',
+          fontSize: '.8rem', color: 'var(--primary)', fontWeight: 600,
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}>
+          <span>{currentSupplier.icon}</span>
+          Showing {filtered.length} products for {currentSupplier.name}
+        </div>
+      )}
 
       <div className="pos-search-bar">
         <input
           className="pos-search-input"
-          placeholder="Search by name or SKU…"
+          placeholder="Search by name, SKU or barcode…"
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
@@ -64,13 +105,20 @@ export default function POSPage() {
           </div>
         ) : filtered.length === 0 ? (
           <div className="empty-state">
-            <div className="empty-icon">🔍</div>
-            <div className="empty-title">No products found</div>
+            <div className="empty-icon">{myProductsOnly ? '🏪' : '🔍'}</div>
+            <div className="empty-title">
+              {myProductsOnly ? 'No products in your store' : 'No products found'}
+            </div>
+            {myProductsOnly && (
+              <div className="empty-sub">Add products in Inventory or your Profile → Store</div>
+            )}
           </div>
         ) : (
           <div className="pos-grid">
             {filtered.map(p => {
               const stock = getStock(p.id);
+              const supplier = suppliers.find(s => s.id === p.supplierId);
+              const hideStock = supplier?.hideStock === true;
               return (
                 <div
                   key={p.id}
@@ -81,7 +129,13 @@ export default function POSPage() {
                   <span className="pos-item-icon">{p.icon}</span>
                   <span className="pos-item-name">{p.name}</span>
                   <span className="pos-item-price">${p.price.toFixed(2)}</span>
-                  <span className="pos-item-stock">{stock === 0 ? 'Out of stock' : `${stock} in stock`}</span>
+                  <span className="pos-item-stock">
+                    {stock === 0
+                      ? 'Out of stock'
+                      : hideStock
+                        ? 'In stock'
+                        : `${stock} in stock`}
+                  </span>
                 </div>
               );
             })}

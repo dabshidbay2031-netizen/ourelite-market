@@ -166,6 +166,7 @@ export default function ProfilePage() {
   const [bizSlug,      setBizSlug]      = useState('');
   const [slugError,    setSlugError]    = useState('');
   const [location,     setLocation]     = useState('');
+  const [hideStock,    setHideStock]    = useState(false);
   const [savingBiz,    setSavingBiz]    = useState(false);
   const [savedBiz,     setSavedBiz]     = useState(false);
 
@@ -194,6 +195,7 @@ export default function ProfilePage() {
   const [editBP,       setEditBP]       = useState<BusinessProduct | null>(null);
   const [editPrice,    setEditPrice]    = useState('');
   const [editStock,    setEditStock]    = useState('');
+  const [editMoq,      setEditMoq]      = useState('1');
   const [savingBP,     setSavingBP]     = useState(false);
   const [deletingBP,   setDeletingBP]   = useState<number | null>(null);
 
@@ -201,6 +203,7 @@ export default function ProfilePage() {
   const [claimProduct, setClaimProduct] = useState<Product | null>(null);
   const [claimPrice,   setClaimPrice]   = useState('');
   const [claimStock,   setClaimStock]   = useState('10');
+  const [claimMoq,     setClaimMoq]     = useState('1');
   const [savingClaim,  setSavingClaim]  = useState(false);
 
   /* ── New product form (profile page) ────────────────────── */
@@ -225,6 +228,7 @@ export default function ProfilePage() {
       setBizName(currentSupplier.name ?? '');
       setBizIcon(currentSupplier.icon ?? '🏭');
       setLocation(currentSupplier.location ?? '');
+      setHideStock(currentSupplier.hideStock ?? false);
       setBizSlug((currentSupplier as unknown as Record<string,unknown>).slug as string ?? '');
       const nums = currentSupplier.contactNumbers ?? [];
       setContacts(nums.length > 0 ? nums : ['']);
@@ -310,6 +314,7 @@ export default function ProfilePage() {
         icon:           bizIcon,
         location:       location.trim(),
         slug:           slug || null,
+        hideStock,
       }),
     });
     await refreshAccount();
@@ -355,6 +360,7 @@ export default function ProfilePage() {
           productId:   claimProduct.id,
           customPrice: p,
           stockQty:    parseInt(claimStock) || 0,
+          moq:         Math.max(1, parseInt(claimMoq) || 1),
         }),
       });
       if (res.ok) {
@@ -374,6 +380,7 @@ export default function ProfilePage() {
     setEditBP(bp);
     setEditPrice(String(bp.customPrice));
     setEditStock(String(bp.stockQty));
+    setEditMoq(String(bp.moq ?? 1));
   }
 
   async function saveEditBP() {
@@ -386,6 +393,7 @@ export default function ProfilePage() {
         body:    JSON.stringify({
           customPrice: parseFloat(editPrice),
           stockQty:    parseInt(editStock) || 0,
+          moq:         Math.max(1, parseInt(editMoq) || 1),
         }),
       });
       if (res.ok) {
@@ -838,9 +846,11 @@ export default function ProfilePage() {
                         {editBP?.id === bp.id ? (
                           <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
                             <input className="form-input" type="number" value={editPrice} onChange={e => setEditPrice(e.target.value)}
-                              style={{ width:80, padding:'4px 8px', fontSize:'.82rem' }} placeholder="Price" />
+                              style={{ width:80, padding:'4px 8px', fontSize:'.82rem' }} placeholder="Price $" />
                             <input className="form-input" type="number" value={editStock} onChange={e => setEditStock(e.target.value)}
-                              style={{ width:80, padding:'4px 8px', fontSize:'.82rem' }} placeholder="Qty" />
+                              style={{ width:80, padding:'4px 8px', fontSize:'.82rem' }} placeholder="Stock" />
+                            <input className="form-input" type="number" min="1" value={editMoq} onChange={e => setEditMoq(e.target.value)}
+                              style={{ width:80, padding:'4px 8px', fontSize:'.82rem' }} placeholder="MOQ" title="Minimum Order Quantity" />
                             <div style={{ display:'flex', gap:4 }}>
                               <button className="btn btn-primary" style={{ fontSize:'.75rem', padding:'4px 8px' }} onClick={saveEditBP} disabled={savingBP}>
                                 {savingBP ? '…' : '✓'}
@@ -855,6 +865,11 @@ export default function ProfilePage() {
                             <div className={`biz-stock-badge${bp.stockQty < 5 ? ' low' : ''}`}>
                               {bp.stockQty} in stock
                             </div>
+                            {(bp.moq ?? 1) > 1 && (
+                              <div style={{ fontSize:'.72rem', color:'var(--primary)', fontWeight:600, marginTop:2 }}>
+                                MOQ: {bp.moq}
+                              </div>
+                            )}
                           </>
                         )}
                       </div>
@@ -1009,6 +1024,46 @@ export default function ProfilePage() {
                     Add contact number
                   </button>
                 )}
+              </div>
+
+              {/* Hide stock toggle */}
+              <div className="form-group">
+                <label className="form-label">Visibility Settings</label>
+                <button
+                  type="button"
+                  onClick={() => setHideStock(h => !h)}
+                  style={{
+                    display:'flex', alignItems:'center', gap:12, width:'100%',
+                    background: hideStock ? 'var(--primary-light, #EEF2FF)' : 'var(--surface)',
+                    border:`1px solid ${hideStock ? 'var(--primary)' : 'var(--border)'}`,
+                    borderRadius:10, padding:'12px 14px', cursor:'pointer', textAlign:'left',
+                  }}
+                >
+                  <span style={{ fontSize:20 }}>{hideStock ? '🔒' : '👁️'}</span>
+                  <div>
+                    <div style={{ fontWeight:600, fontSize:'.88rem', color:'var(--text)' }}>
+                      {hideStock ? 'Stock count hidden from customers' : 'Stock count visible to customers'}
+                    </div>
+                    <div style={{ fontSize:'.76rem', color:'var(--text-muted)', marginTop:2 }}>
+                      {hideStock
+                        ? 'Customers see "In stock" instead of exact quantity'
+                        : 'Customers can see exact stock numbers on your products'}
+                    </div>
+                  </div>
+                  <div style={{ marginLeft:'auto', flexShrink:0 }}>
+                    <div style={{
+                      width:38, height:22, borderRadius:11,
+                      background: hideStock ? 'var(--primary)' : '#d1d5db',
+                      position:'relative', transition:'background .2s',
+                    }}>
+                      <div style={{
+                        position:'absolute', top:3, left: hideStock ? 19 : 3,
+                        width:16, height:16, borderRadius:'50%', background:'#fff',
+                        transition:'left .2s', boxShadow:'0 1px 3px rgba(0,0,0,.2)',
+                      }} />
+                    </div>
+                  </div>
+                </button>
               </div>
 
               {savedBiz && <div className="auth-success" style={{ marginBottom: 12 }}>✓ Profile saved successfully</div>}
@@ -1212,16 +1267,21 @@ export default function ProfilePage() {
               <div style={{ fontSize:'.8rem', color:'var(--text-muted)', margin:'8px 0' }}>
                 Catalog price: <strong>${claimProduct.price.toFixed(2)}</strong>
               </div>
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10 }}>
                 <div className="form-group">
-                  <label className="form-label">Your Selling Price ($) *</label>
+                  <label className="form-label">Your Price ($) *</label>
                   <input className="form-input" type="number" min="0" step="0.01" value={claimPrice}
                     onChange={e => setClaimPrice(e.target.value)} autoFocus />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Your Stock Qty</label>
+                  <label className="form-label">Stock Qty</label>
                   <input className="form-input" type="number" min="0" value={claimStock}
                     onChange={e => setClaimStock(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label" title="Minimum Order Quantity">MOQ</label>
+                  <input className="form-input" type="number" min="1" value={claimMoq}
+                    onChange={e => setClaimMoq(e.target.value)} placeholder="1" />
                 </div>
               </div>
               <button className="btn btn-primary btn-full btn-lg" onClick={handleClaim} disabled={savingClaim} style={{ marginTop:8 }}>

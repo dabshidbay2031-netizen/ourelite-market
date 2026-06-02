@@ -15,6 +15,7 @@ export async function PATCH(
   const updates: Record<string, unknown> = {};
   if (body.customPrice !== undefined) updates.custom_price = parseFloat(String(body.customPrice));
   if (body.stockQty    !== undefined) updates.stock_qty    = parseInt(String(body.stockQty), 10);
+  if (body.moq         !== undefined) updates.moq          = Math.max(1, parseInt(String(body.moq), 10));
   if (body.isActive    !== undefined) updates.is_active    = Boolean(body.isActive);
 
   if (Object.keys(updates).length === 0) {
@@ -37,6 +38,7 @@ export async function PATCH(
     productId:   row.product_id,
     customPrice: row.custom_price,
     stockQty:    row.stock_qty,
+    moq:         (row.moq as number) ?? 1,
     isActive:    row.is_active,
     createdAt:   row.created_at,
     product:     row.products ?? null,

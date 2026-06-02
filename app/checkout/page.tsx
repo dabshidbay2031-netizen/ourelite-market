@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
+import Receipt from '@/components/Receipt';
 import type { PaymentMethod } from '@/lib/types';
 
 interface Address {
@@ -17,7 +18,13 @@ export default function CheckoutPage() {
   const { state, cartTotal, setPaymentMethod, setPaymentState, clearCart, adjustStock, toast } = useApp();
   const { user } = useAuth();
   const { cart, products, paymentMethod, paymentState } = state;
-  const [lastOrderId, setLastOrderId] = useState('');
+  const [lastOrderId,    setLastOrderId]    = useState('');
+  const [showReceipt,    setShowReceipt]    = useState(false);
+  const [receiptItems,   setReceiptItems]   = useState(state.cart);
+  const [receiptSubtotal,setReceiptSubtotal]= useState(0);
+  const [receiptDiscount,setReceiptDiscount]= useState(0);
+  const [receiptTotal,   setReceiptTotal]   = useState(0);
+  const [receiptName,    setReceiptName]    = useState('');
 
   // Customer info
   const [name,       setName]       = useState('');
@@ -186,6 +193,13 @@ export default function CheckoutPage() {
       }
     } catch { /* non-fatal */ }
 
+    // Snapshot cart data before clearing for receipt
+    setReceiptItems([...cart]);
+    setReceiptSubtotal(subtotal);
+    setReceiptDiscount(discountAmt);
+    setReceiptTotal(total);
+    setReceiptName(name);
+
     clearCart();
     setPaymentState('success');
     toast('Payment successful! 🎉', 'success');
@@ -206,6 +220,9 @@ export default function CheckoutPage() {
     );
   }
 
+  // Find the supplier for the receipt (if user is a supplier)
+  const currentSupplier = state.suppliers.find(s => s.authUserId === user?.id);
+
   if (paymentState === 'success') {
     return (
       <div className="page-anim">
@@ -216,9 +233,15 @@ export default function CheckoutPage() {
           <div className="success-subtitle">Your order has been placed</div>
           <div className="success-order-box">
             <div className="success-order-id">{lastOrderId || 'Order Confirmed'}</div>
-            <div className="success-order-total">Total paid: <strong>${total.toFixed(2)}</strong></div>
+            <div className="success-order-total">Total paid: <strong>${receiptTotal.toFixed(2)}</strong></div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
+            <button
+              className="btn btn-secondary btn-lg"
+              onClick={() => setShowReceipt(true)}
+            >
+              🖨️ Print Receipt
+            </button>
             {user && (
               <button className="btn btn-outline btn-lg" onClick={() => { setPaymentState('idle'); router.push(`/orders/${lastOrderId}`); }}>
                 📍 Track Order
@@ -229,6 +252,22 @@ export default function CheckoutPage() {
             </button>
           </div>
         </div>
+
+        {showReceipt && (
+          <Receipt
+            orderId={lastOrderId}
+            businessName={currentSupplier?.name}
+            businessIcon={currentSupplier?.icon}
+            customerName={receiptName}
+            paymentMethod={paymentMethod}
+            items={receiptItems}
+            products={state.products}
+            subtotal={receiptSubtotal}
+            discount={receiptDiscount}
+            total={receiptTotal}
+            onClose={() => setShowReceipt(false)}
+          />
+        )}
       </div>
     );
   }
