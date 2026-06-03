@@ -6,8 +6,17 @@ import { useApp }  from '@/context/AppContext';
 import type { Supplier, Product, Order } from '@/lib/types';
 import Link from 'next/link';
 
-/* ── Exported page ──────────────────────────────────────────────────── */
-export default function AdminPage() { return <AdminDashboardInner />; }
+/* ── Mount guard — admin uses browser-only APIs, never SSR ─────────── */
+export default function AdminPage() {
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
+  if (!mounted) return (
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'80vh', flexDirection:'column', gap:12 }}>
+      <div className="spinner" style={{ width:36, height:36 }} />
+    </div>
+  );
+  return <AdminDashboardInner />;
+}
 
 /* ── Types ──────────────────────────────────────────────────────────── */
 type AdminRole = 'admin' | 'semi_admin' | null;

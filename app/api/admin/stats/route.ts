@@ -16,43 +16,62 @@ function mapOrder(o: Record<string, unknown>) {
   };
 }
 
-export async function GET() {
-  const sb = getSupabaseAdmin();
+const sb = () => getSupabaseAdmin();
 
+async function getCount(table: string, filter?: { col: string; val: string }): Promise<number> {
+  try {
+    const base = sb().from(table).select('*', { count: 'exact', head: true });
+    const query = filter ? base.eq(filter.col, filter.val) : base;
+    const { count } = await query;
+    return count ?? 0;
+  } catch { return 0; }
+}
+
+async function getRevenue(): Promise<number> {
+  try {
+    const { data } = await sb().from('orders').select('total');
+    return ((data ?? []) as Record<string, unknown>[])
+      .reduce((sum, o) => sum + (Number(o.total) || 0), 0);
+  } catch { return 0; }
+}
+
+async function getRecentOrders(): Promise<ReturnType<typeof mapOrder>[]> {
+  try {
+    const { data } = await sb().from('orders')
+      .select('*').order('created_at', { ascending: false }).limit(8);
+    return ((data ?? []) as Record<string, unknown>[]).map(mapOrder);
+  } catch { return []; }
+}
+
+export async function GET() {
   const [
-    { count: totalBusinesses },
-    { count: totalSuppliers },
-    { count: totalProducts },
-    { count: totalUsers },
-    { count: pendingVerifications },
-    ordersResult,
-    revenueResult,
-    recentOrdersResult,
+    totalBusinesses,
+    totalSuppliers,
+    totalProducts,
+    totalUsers,
+    pendingVerifications,
+    totalOrders,
+    totalRevenue,
+    recentOrders,
   ] = await Promise.all([
-    sb.from('suppliers').select('*', { count: 'exact', head: true }).eq('account_type', 'business'),
-    sb.from('suppliers').select('*', { count: 'exact', head: true }).eq('account_type', 'supplier'),
-    sb.from('products').select('*', { count: 'exact', head: true }),
-    sb.from('profiles').select('*', { count: 'exact', head: true }),
-    sb.from('verification_requests').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
-    sb.from('orders').select('*', { count: 'exact', head: true }),
-    sb.from('orders').select('total'),
-    sb.from('orders').select('*').order('created_at', { ascending: false }).limit(8),
+    getCount('suppliers', { col: 'account_type', val: 'business' }),
+    getCount('suppliers', { col: 'account_type', val: 'supplier' }),
+    getCount('products'),
+    getCount('profiles'),
+    getCount('verification_requests', { col: 'status', val: 'pending' }),
+    getCount('orders'),
+    getRevenue(),
+    getRecentOrders(),
   ]);
 
-  const totalRevenue = ((revenueResult.data ?? []) as Record<string, unknown>[])
-    .reduce((sum, o) => sum + (Number(o.total) || 0), 0);
-
-  const recentOrders = ((recentOrdersResult.data ?? []) as Record<string, unknown>[])
-    .map(mapOrder);
-
   return NextResponse.json({
-    totalBusinesses:      totalBusinesses  ?? 0,
-    totalSuppliers:       totalSuppliers   ?? 0,
-    totalProducts:        totalProducts    ?? 0,
-    totalOrders:          ordersResult.count ?? 0,
+    totalBusinesses,
+    totalSuppliers,
+    totalProducts,
+    totalOrders,
     totalRevenue,
-    totalUsers:           totalUsers       ?? 0,
-    pendingVerifications: pendingVerifications ?? 0,
+    totalUsers,
+    pendingVerifications,
     recentOrders,
   });
 }

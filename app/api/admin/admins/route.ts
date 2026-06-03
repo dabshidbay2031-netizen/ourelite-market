@@ -21,8 +21,9 @@ export async function GET() {
       .order('created_at', { ascending: false });
     if (error) throw error;
     return NextResponse.json((data ?? []).map(r => mapAdmin(r as Record<string, unknown>)));
-  } catch (e: unknown) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+  } catch {
+    // Table doesn't exist yet — return empty list instead of 500
+    return NextResponse.json([]);
   }
 }
 
