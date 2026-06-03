@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
-import { ORDERS } from '@/lib/seed-data';
 import { errMsg, isMissingColumnError } from '@/lib/apiHelpers';
 
 function mapOrder(o: Record<string, unknown>) {
@@ -60,8 +59,7 @@ export async function GET(req: Request) {
     if (error) throw error;
     return NextResponse.json(data.map(mapOrder));
   } catch {
-    if (userId) return NextResponse.json([]);
-    return NextResponse.json(ORDERS);
+    return NextResponse.json([]);
   }
 }
 

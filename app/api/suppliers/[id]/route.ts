@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
-import { SUPPLIERS } from '@/lib/seed-data';
 import { errMsg } from '@/lib/apiHelpers';
 
 function mapSupplier(s: Record<string, unknown>) {
@@ -35,9 +34,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (error) throw error;
     return NextResponse.json(mapSupplier(data));
   } catch {
-    const s = SUPPLIERS.find(x => x.id === id);
-    if (!s) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-    return NextResponse.json(s);
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 }
 

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
-import { SUPPLIERS } from '@/lib/seed-data';
 import { errMsg, isUUIDError } from '@/lib/apiHelpers';
 
 function mapSupplier(s: Record<string, unknown>) {
@@ -42,10 +41,7 @@ export async function GET(req: Request) {
       : { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600' };
     return NextResponse.json(data.map(mapSupplier), { headers });
   } catch {
-    if (authUserId) return NextResponse.json([]);
-    return NextResponse.json(SUPPLIERS, {
-      headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600' },
-    });
+    return NextResponse.json([]);
   }
 }
 

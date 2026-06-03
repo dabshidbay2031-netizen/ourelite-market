@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
-import { NOTIFICATIONS } from '@/lib/seed-data';
 import { errMsg } from '@/lib/apiHelpers';
 
 export async function GET() {
@@ -24,7 +23,7 @@ export async function GET() {
 
     return NextResponse.json(mapped);
   } catch {
-    return NextResponse.json(NOTIFICATIONS);
+    return NextResponse.json([]);
   }
 }
 

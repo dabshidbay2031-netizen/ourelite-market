@@ -1,17 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
-import { PRODUCTS } from '@/lib/seed-data';
-
 function mapProduct(p: Record<string, unknown>) {
-  const id   = typeof p.id === 'number' ? p.id : parseInt(String(p.id), 10);
-  const seed = PRODUCTS.find(s => s.id === id);
-
-  const tags    = (Array.isArray(p.tags) && (p.tags as unknown[]).length > 0)
-                    ? p.tags as string[]
-                    : (seed?.tags ?? []);
-  const brand   = (p.brand   && String(p.brand).trim())   ? String(p.brand)   : (seed?.brand   ?? null);
-  const barcode = (p.barcode && String(p.barcode).trim())  ? String(p.barcode) : (seed?.barcode ?? null);
-  const subCat  = (p.sub_category && String(p.sub_category).trim()) ? String(p.sub_category) : (seed?.subCategory ?? null);
+  const id      = typeof p.id === 'number' ? p.id : parseInt(String(p.id), 10);
+  const tags    = Array.isArray(p.tags) ? p.tags as string[] : [];
+  const brand   = (p.brand   && String(p.brand).trim())  ? String(p.brand)  : null;
+  const barcode = (p.barcode && String(p.barcode).trim()) ? String(p.barcode): null;
+  const subCat  = (p.sub_category && String(p.sub_category).trim()) ? String(p.sub_category) : null;
 
   return {
     id,
@@ -47,9 +41,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (error) throw error;
     return NextResponse.json(mapProduct(data));
   } catch {
-    const product = PRODUCTS.find(p => p.id === id);
-    if (!product) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-    return NextResponse.json(product);
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 }
 
