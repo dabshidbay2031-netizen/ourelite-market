@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import Header from '@/components/Header';
+import ProductImage from '@/components/ProductImage';
 import { useApp } from '@/context/AppContext';
 import { CATEGORIES } from '@/lib/data';
 
@@ -12,11 +13,11 @@ const EMOJI_OPTIONS = ['📦','📱','💻','🎧','👗','👟','🏠','🍎','
 interface ProductForm {
   name: string; price: string; originalPrice: string; category: string;
   icon: string; stock: string; sku: string; description: string;
-  supplierId: string; barcode: string;
+  supplierId: string; barcode: string; imageUrl: string;
 }
 const emptyForm: ProductForm = {
   name: '', price: '', originalPrice: '', category: 'electronics',
-  icon: '📦', stock: '0', sku: '', description: '', supplierId: '', barcode: '',
+  icon: '📦', stock: '0', sku: '', description: '', supplierId: '', barcode: '', imageUrl: '',
 };
 
 export default function InventoryPage() {
@@ -57,6 +58,7 @@ export default function InventoryPage() {
       sku: p.sku, description: p.description,
       supplierId: p.supplierId ? String(p.supplierId) : '',
       barcode: p.barcode ?? '',
+      imageUrl: p.imageUrls?.[0] ?? p.imageUrl ?? '',
     });
     setShowForm(true);
   };
@@ -82,6 +84,7 @@ export default function InventoryPage() {
             sku: p.sku ?? '', description: p.description ?? '',
             supplierId: p.supplierId ? String(p.supplierId) : '',
             barcode: code,
+            imageUrl: p.imageUrls?.[0] ?? p.imageUrl ?? '',
           });
           setShowForm(true);
         } else {
@@ -172,6 +175,8 @@ export default function InventoryPage() {
       sku: form.sku.trim(), description: form.description.trim(),
       supplierId: form.supplierId ? parseInt(form.supplierId, 10) : null,
       barcode: form.barcode.trim() || null,
+      imageUrl: form.imageUrl.trim() || null,
+      imageUrls: form.imageUrl.trim() ? [form.imageUrl.trim()] : [],
     };
     const url    = editingId ? `/api/products/${editingId}` : '/api/products';
     const method = editingId ? 'PATCH' : 'POST';
@@ -349,7 +354,9 @@ export default function InventoryPage() {
             const barcode = (p as typeof p & { barcode?: string }).barcode;
             return (
               <div key={p.id} className="inv-item">
-                <div className="inv-item-icon">{p.icon}</div>
+                <div className="inv-item-icon">
+                  <ProductImage icon={p.icon} imageUrl={(p as typeof p & {imageUrl?:string}).imageUrl} imageUrls={(p as typeof p & {imageUrls?:string[]}).imageUrls} name={p.name} style={{ borderRadius: 10 }} />
+                </div>
                 <div className="inv-item-info">
                   <div className="inv-item-name">{p.name}</div>
                   <div className="inv-item-sku">
@@ -397,9 +404,34 @@ export default function InventoryPage() {
             </div>
             <div className="modal-body">
 
-              {/* Icon picker */}
+              {/* Photo preview + URL input */}
               <div className="form-group">
-                <label className="form-label">Icon</label>
+                <label className="form-label">📷 Product Photo</label>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                  {/* Live preview */}
+                  <div style={{
+                    width: 72, height: 72, borderRadius: 12, overflow: 'hidden', flexShrink: 0,
+                    background: 'var(--border-light, #f1f5f9)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    border: '1.5px solid var(--border)', fontSize: 32,
+                  }}>
+                    <ProductImage icon={form.icon} imageUrl={form.imageUrl || null} name="preview" style={{ borderRadius: 10 }} />
+                  </div>
+                  <input
+                    className="form-input"
+                    placeholder="Paste image URL (https://…)"
+                    value={form.imageUrl}
+                    onChange={e => pf('imageUrl', e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                </div>
+                <div style={{ fontSize: '.75rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                  Paste a direct image link (jpg/png/webp). Leave blank to use the emoji icon below.
+                </div>
+              </div>
+
+              {/* Fallback icon picker — shown/used only when no photo URL */}
+              <div className="form-group">
+                <label className="form-label">Fallback Icon {form.imageUrl ? <span style={{ color:'var(--text-muted)', fontWeight:400 }}>(hidden while photo is set)</span> : null}</label>
                 <div className="emoji-picker-row">
                   {EMOJI_OPTIONS.map(em => (
                     <button key={em} className={`avatar-opt ${form.icon === em ? 'selected' : ''}`} onClick={() => pf('icon', em)}>{em}</button>

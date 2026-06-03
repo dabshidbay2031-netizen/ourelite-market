@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/context/AppContext';
+import ProductImage from '@/components/ProductImage';
 
 export default function CartDrawer() {
   const router = useRouter();
@@ -43,7 +44,9 @@ export default function CartDrawer() {
               if (!p) return null;
               return (
                 <div key={item.id} className="cart-item">
-                  <div className="cart-item-icon">{p.icon}</div>
+                  <div className="cart-item-icon">
+                    <ProductImage icon={p.icon} imageUrl={p.imageUrl} imageUrls={p.imageUrls} name={p.name} style={{ borderRadius: 8 }} />
+                  </div>
                   <div className="cart-item-info">
                     <div className="cart-item-name">{p.name}</div>
                     <div className="cart-item-price">${(p.price * item.qty).toFixed(2)}</div>

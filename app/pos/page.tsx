@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import Header from '@/components/Header';
+import ProductImage from '@/components/ProductImage';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { CATEGORIES } from '@/lib/data';
@@ -126,7 +127,9 @@ export default function POSPage() {
                   onClick={() => stock > 0 && addToCart(p.id)}
                   style={stock === 0 ? { opacity: 0.5, pointerEvents: 'none' } : {}}
                 >
-                  <span className="pos-item-icon">{p.icon}</span>
+                  <div className="pos-item-icon">
+                    <ProductImage icon={p.icon} imageUrl={p.imageUrl} imageUrls={p.imageUrls} name={p.name} style={{ borderRadius: 8 }} />
+                  </div>
                   <span className="pos-item-name">{p.name}</span>
                   <span className="pos-item-price">${p.price.toFixed(2)}</span>
                   <span className="pos-item-stock">

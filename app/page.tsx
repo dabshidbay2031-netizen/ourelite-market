@@ -4,6 +4,7 @@ import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import ProductCard from '@/components/ProductCard';
+import ProductImage from '@/components/ProductImage';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { CATEGORIES } from '@/lib/data';
@@ -98,7 +99,9 @@ export default function ExplorePage() {
                 style={{ flexShrink: 0, width: 140 }}
                 onClick={() => router.push(`/product/${p.id}`)}
               >
-                <div className="similar-img">{p.icon}</div>
+                <div className="similar-img">
+                  <ProductImage icon={p.icon} imageUrl={p.imageUrl} imageUrls={p.imageUrls} name={p.name} style={{ borderRadius: 8 }} />
+                </div>
                 <div className="similar-body">
                   <div className="similar-name">{p.name}</div>
                   <div className="similar-price">${p.price.toFixed(2)}</div>

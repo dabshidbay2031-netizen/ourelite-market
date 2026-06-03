@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { CATEGORIES } from '@/lib/data';
+import ProductImage from '@/components/ProductImage';
 import type { Supplier, Product, Order, PriceTier } from '@/lib/types';
 
 const EMOJI_OPTIONS = ['📦','📱','💻','🎧','👗','👟','🏠','🍎','💊','⚽','🎵','📷','🧴','🌿','☕','🍯','🥛','💡','🌬️','🩹','❤️','🧘','🪢','💪','🍶','🕶️','👔','📺','📲','⌚','🎮','🖱️','⌨️'];
@@ -19,6 +20,7 @@ interface SupplierProductFormData {
   stock:       string;
   moq:         string;
   description: string;
+  imageUrl:    string;
   tier1Max:    string;
   tier1Price:  string;
   tier2Max:    string;
@@ -34,6 +36,7 @@ const emptyProductForm: SupplierProductFormData = {
   stock:       '0',
   moq:         '1',
   description: '',
+  imageUrl:    '',
   tier1Max:    '299',
   tier1Price:  '',
   tier2Max:    '599',
@@ -154,6 +157,7 @@ export default function SupplierDashboard({ supplier }: Props) {
       stock:       String(p.stock),
       moq:         String(p.moq ?? 1),
       description: p.description,
+      imageUrl:    p.imageUrls?.[0] ?? p.imageUrl ?? '',
       tier1Max:    tiers[0]?.maxQty != null ? String(tiers[0].maxQty) : '299',
       tier1Price:  tiers[0] ? String(tiers[0].price) : '',
       tier2Max:    tiers[1]?.maxQty != null ? String(tiers[1].maxQty) : '599',
@@ -183,6 +187,8 @@ export default function SupplierDashboard({ supplier }: Props) {
       priceTiers,
       isB2b:       true,
       moq:         form.moq,
+      imageUrl:    form.imageUrl.trim() || null,
+      imageUrls:   form.imageUrl.trim() ? [form.imageUrl.trim()] : [],
     };
 
     if (editingProd) {
@@ -357,7 +363,9 @@ export default function SupplierDashboard({ supplier }: Props) {
                 const cat = CATEGORIES.find(c => c.id === p.category);
                 return (
                   <div key={p.id} className="biz-product-item">
-                    <div className="biz-product-icon">{p.icon}</div>
+                    <div className="biz-product-icon">
+                      <ProductImage icon={p.icon} imageUrl={(p as Product & {imageUrl?:string}).imageUrl} imageUrls={(p as Product & {imageUrls?:string[]}).imageUrls} name={p.name} style={{ borderRadius: 8 }} />
+                    </div>
                     <div className="biz-product-info">
                       <div className="biz-product-name">{p.name}</div>
                       <div className="biz-product-meta">{cat?.icon} {cat?.name}</div>
@@ -610,9 +618,34 @@ export default function SupplierDashboard({ supplier }: Props) {
               <button className="modal-close" onClick={() => setShowForm(false)}>✕</button>
             </div>
             <div className="modal-body">
-              {/* Icon picker */}
+
+              {/* Photo URL + preview */}
               <div className="form-group">
-                <label className="form-label">Icon</label>
+                <label className="form-label">📷 Product Photo</label>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                  <div style={{
+                    width: 72, height: 72, borderRadius: 12, overflow: 'hidden', flexShrink: 0,
+                    background: 'var(--border-light, #f1f5f9)', display: 'flex', alignItems: 'center',
+                    justifyContent: 'center', border: '1.5px solid var(--border)', fontSize: 32,
+                  }}>
+                    <ProductImage icon={form.icon} imageUrl={form.imageUrl || null} name="preview" style={{ borderRadius: 10 }} />
+                  </div>
+                  <input
+                    className="form-input"
+                    placeholder="Paste image URL (https://…)"
+                    value={form.imageUrl}
+                    onChange={e => pf('imageUrl', e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                </div>
+                <div style={{ fontSize: '.75rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                  Paste a direct image link. Leave blank to use the emoji icon below.
+                </div>
+              </div>
+
+              {/* Fallback icon picker */}
+              <div className="form-group">
+                <label className="form-label">Fallback Icon {form.imageUrl ? <span style={{ color:'var(--text-muted)', fontWeight:400 }}>(hidden while photo is set)</span> : null}</label>
                 <div className="emoji-picker-row">
                   {EMOJI_OPTIONS.map(em => (
                     <button
