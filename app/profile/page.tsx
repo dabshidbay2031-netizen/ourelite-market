@@ -152,6 +152,14 @@ export default function ProfilePage() {
           signOut, refreshAccount, updateProfile } = useAuth();
   const { state, toast, reloadProducts } = useApp();
 
+  // Grace period: wait a little extra after auth says "loading=false, user=null"
+  // to avoid flashing "Sign in required" while Firebase is still restoring.
+  const [authGrace, setAuthGrace] = useState(true);
+  useEffect(() => {
+    const t = setTimeout(() => setAuthGrace(false), 1500);
+    return () => clearTimeout(t);
+  }, []);
+
   /* ── User profile state ──────────────────────────────────── */
   const [fullName,     setFullName]     = useState('');
   const [phone,        setPhone]        = useState('');
@@ -594,8 +602,8 @@ export default function ProfilePage() {
     else toast('Failed to delete', 'error');
   };
 
-  /* ── Loading state ─────────────────────────────────────────── */
-  if (loading) {
+  /* ── Loading / grace period ───────────────────────────────── */
+  if (loading || authGrace) {
     return (
       <div className="page-anim">
         <Header showSearch={false} />

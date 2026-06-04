@@ -135,12 +135,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       recompute();
     });
 
-    // Safety: never let the UI hang on loading more than 5s
+    // Safety: never let the UI hang on loading more than 8s
     const timeout = setTimeout(() => {
       fbReady.current = true;
       sbReady.current = true;
+      recompute();
       setLoading(false);
-    }, 5000);
+    }, 8000);
 
     return () => {
       subscription.unsubscribe();
