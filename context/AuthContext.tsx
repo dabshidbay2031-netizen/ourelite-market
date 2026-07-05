@@ -45,6 +45,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [currentProfile,  setCurrentProfile]  = useState<UserProfile | null>(null);
   const [accountType,     setAccountType]     = useState<AccountType | null>(null);
   const [loading,         setLoading]         = useState(true);
+  const [configError,     setConfigError]     = useState<string | null>(null);
 
   const lastResolvedUid = useRef<string | null>(null);
   // Ref mirror of accountType: the auth listener is registered once with
@@ -130,7 +131,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   /* ── Auth listener ───────────────────────────────────────────── */
   useEffect(() => {
-    const sb = getSupabase();
+    let sb: ReturnType<typeof getSupabase>;
+    try {
+      sb = getSupabase();
+    } catch (e) {
+      // Deployment misconfiguration (NEXT_PUBLIC_SUPABASE_* not set at build
+      // time). Without this guard the throw unmounts the entire app into the
+      // generic global-error screen; show an actionable message instead.
+      console.error('[Auth] Supabase client init failed:', e);
+      setConfigError(e instanceof Error ? e.message : String(e));
+      setLoading(false);
+      return;
+    }
 
     const { data: { subscription } } = sb.auth.onAuthStateChange((_event, session) => {
       applySession(session?.user ?? null);
@@ -191,6 +203,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (res.ok) setCurrentProfile(await res.json());
     else throw new Error('Profile update failed');
   };
+
+  if (configError) {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        justifyContent: 'center', minHeight: '100dvh', gap: 14, padding: 24, textAlign: 'center',
+      }}>
+        <div style={{ fontSize: '2.5rem' }}>⚙️</div>
+        <div style={{ fontWeight: 800, fontSize: '1.3rem' }}>Setup required</div>
+        <div style={{ color: 'var(--text-light, #64748b)', maxWidth: 420 }}>
+          The app isn&apos;t configured yet. Add the Supabase environment variables to the
+          deployment and redeploy.
+        </div>
+        <code style={{
+          fontSize: '0.8rem', background: 'rgba(100,116,139,0.12)', padding: '8px 12px',
+          borderRadius: 8, maxWidth: 420, wordBreak: 'break-word',
+        }}>
+          {configError}
+        </code>
+      </div>
+    );
+  }
 
   return (
     <AuthContext.Provider value={{

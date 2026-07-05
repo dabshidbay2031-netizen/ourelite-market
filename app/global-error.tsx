@@ -17,6 +17,14 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
           <div style={{ color: '#64748b', maxWidth: 360 }}>
             Reloading usually fixes it. If it keeps happening, try again later.
           </div>
+          {(error?.message || error?.digest) && (
+            <code style={{
+              fontSize: '0.75rem', color: '#94a3b8', background: 'rgba(100,116,139,0.1)',
+              padding: '6px 10px', borderRadius: 6, maxWidth: 420, wordBreak: 'break-word',
+            }}>
+              {error.message || `digest: ${error.digest}`}
+            </code>
+          )}
           <button
             onClick={() => reset()}
             style={{
