@@ -9,7 +9,7 @@ import { resolveChatUser } from '@/lib/chatHelpers';
  */
 export async function GET(
   req: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const { searchParams } = new URL(req.url);
   const viewerId = searchParams.get('viewerId') ?? '';
@@ -18,7 +18,7 @@ export async function GET(
     const { data, error } = await getSupabaseAdmin()
       .from('conversations')
       .select('*')
-      .eq('id', params.id)
+      .eq('id', (await params).id)
       .single();
 
     if (error || !data) return NextResponse.json({ error: 'Not found' }, { status: 404 });

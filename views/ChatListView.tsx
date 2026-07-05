@@ -1,0 +1,164 @@
+'use client';
+
+import { useEffect, useState, useCallback } from 'react';
+import { useRouter } from '@/lib/hashRouter';
+import Header from '@/components/Header';
+import { useAuth } from '@/context/AuthContext';
+import type { ChatUser, Message } from '@/lib/types';
+
+interface ConvItem {
+  id:          string;
+  otherUserId: string;
+  otherUser?:  ChatUser;
+  lastMessage?: Pick<Message, 'content' | 'imageUrl' | 'messageType' | 'senderId' | 'createdAt'> | null;
+  unreadCount: number;
+  updatedAt:   string;
+}
+
+function timeAgo(iso: string) {
+  const diff = Date.now() - new Date(iso).getTime();
+  const s = Math.floor(diff / 1000);
+  if (s <  60)  return 'Just now';
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400)return `${Math.floor(s / 3600)}h ago`;
+  return new Date(iso).toLocaleDateString('en-US', { month:'short', day:'numeric' });
+}
+
+function lastMsgPreview(msg: ConvItem['lastMessage'], myId: string): string {
+  if (!msg) return 'Start a conversation…';
+  const prefix = msg.senderId === myId ? 'You: ' : '';
+  if (msg.messageType === 'image') return `${prefix}📷 Photo`;
+  return `${prefix}${msg.content ?? ''}`;
+}
+
+export default function ChatListPage() {
+  const router = useRouter();
+  const { user, loading } = useAuth();
+  const [convs,     setConvs]     = useState<ConvItem[]>([]);
+  const [convLoading, setConvLoading] = useState(true);
+
+  const loadConversations = useCallback(async () => {
+    if (!user) return;
+    setConvLoading(true);
+    try {
+      const res  = await fetch(`/api/conversations?userId=${user.id}`);
+      const data = await res.json();
+      if (!Array.isArray(data)) { setConvs([]); setConvLoading(false); return; }
+
+      // Resolve other user profiles
+      const enriched = await Promise.all(
+        data.map(async (c: ConvItem) => {
+          try {
+            const r = await fetch(`/api/conversations/${c.id}?viewerId=${user.id}`);
+            const d = await r.json();
+            return { ...c, otherUser: d.otherUser };
+          } catch { return c; }
+        })
+      );
+      setConvs(enriched);
+    } catch {
+      setConvs([]);
+    }
+    setConvLoading(false);
+  }, [user]);
+
+  useEffect(() => { loadConversations(); }, [loadConversations]);
+
+  /* ── Not logged in ─── */
+  if (!loading && !user) {
+    return (
+      <div className="page-anim">
+        <Header showSearch={false} />
+        <div className="empty-state" style={{ marginTop: 60 }}>
+          <div className="empty-icon">💬</div>
+          <div className="empty-title">Sign in to chat</div>
+          <div className="empty-sub">You need an account to send messages</div>
+          <button className="btn btn-primary" style={{ marginTop: 16 }}
+            onClick={() => router.push('/auth/login')}>Sign In</button>
+        </div>
+      </div>
+    );
+  }
+
+  const totalUnread = convs.reduce((n, c) => n + c.unreadCount, 0);
+
+  return (
+    <div className="page-anim">
+      <Header showSearch={false} />
+
+      <div className="page-title-bar">
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <span className="page-title">💬 Messages</span>
+          {totalUnread > 0 && (
+            <span className="chat-unread-pill">{totalUnread}</span>
+          )}
+        </div>
+      </div>
+      <p className="page-subtitle">Your conversations</p>
+
+      {convLoading ? (
+        <div style={{ padding: 16 }}>
+          {[1,2,3].map(i => (
+            <div key={i} className="chat-conv-item" style={{ pointerEvents:'none' }}>
+              <div className="skeleton" style={{ width:52, height:52, borderRadius:'50%', flexShrink:0 }} />
+              <div style={{ flex:1, display:'flex', flexDirection:'column', gap:8 }}>
+                <div className="skeleton" style={{ height:13, width:'55%', borderRadius:6 }} />
+                <div className="skeleton" style={{ height:11, width:'75%', borderRadius:6 }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : convs.length === 0 ? (
+        <div className="empty-state" style={{ marginTop: 60 }}>
+          <div className="empty-icon">💬</div>
+          <div className="empty-title">No conversations yet</div>
+          <div className="empty-sub">
+            Visit a supplier&apos;s store page and tap &ldquo;Message&rdquo; to start chatting.
+          </div>
+          <button className="btn btn-primary" style={{ marginTop: 16 }}
+            onClick={() => router.push('/suppliers')}>Browse Suppliers</button>
+        </div>
+      ) : (
+        <div className="chat-conv-list">
+          {convs.map(c => {
+            const ou = c.otherUser;
+            return (
+              <button
+                key={c.id}
+                className="chat-conv-item"
+                onClick={() => router.push(`/chat/${c.id}`)}
+              >
+                {/* Avatar */}
+                <div className="chat-conv-avatar">
+                  <span>{ou?.avatar ?? '👤'}</span>
+                  {ou?.verified && (
+                    <span className="chat-verified-dot" title="Verified">✓</span>
+                  )}
+                </div>
+
+                {/* Info */}
+                <div className="chat-conv-info">
+                  <div className="chat-conv-name-row">
+                    <span className="chat-conv-name">{ou?.name ?? 'Unknown'}</span>
+                    {ou?.type === 'business' && (
+                      <span className="chat-conv-type">Business</span>
+                    )}
+                    <span className="chat-conv-time">{timeAgo(c.updatedAt)}</span>
+                  </div>
+                  <div className="chat-conv-preview">
+                    {lastMsgPreview(c.lastMessage, user!.id)}
+                  </div>
+                </div>
+
+                {/* Unread badge */}
+                {c.unreadCount > 0 && (
+                  <span className="chat-unread-badge">{c.unreadCount}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

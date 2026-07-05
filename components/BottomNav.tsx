@@ -1,15 +1,26 @@
 'use client';
 
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { Link } from '@/lib/hashRouter';
+import { usePathname } from '@/lib/hashRouter';
+import { useEffect, useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
+import { useCashier } from '@/context/CashierContext';
+import { roleFor } from '@/lib/roles';
+import { cashierCanAccess } from '@/lib/cashierPrivileges';
 
 export default function BottomNav() {
   const pathname = usePathname();
   const { unreadCount } = useApp();
-  const { user } = useAuth();
+  const { user, accountType } = useAuth();
+  const { cashier, logoutCashier } = useCashier();
+  // A cashier session governs even if a stale owner session lingers (see GuardedApp).
+  const role = cashier ? 'business' : roleFor(!!user, accountType);
+  const posAllowed = role === 'business' && (!cashier || cashierCanAccess('/pos', cashier.privileges));
+  const [mounted, setMounted] = useState(false);
   const notifs = unreadCount();
+
+  useEffect(() => { setMounted(true); }, []);
 
   const items = [
     {
@@ -21,7 +32,8 @@ export default function BottomNav() {
         </svg>
       ),
     },
-    {
+    // Second slot: POS for businesses with POS access, Orders for everyone else
+    posAllowed ? {
       href: '/pos',
       label: 'POS',
       icon: (
@@ -29,24 +41,14 @@ export default function BottomNav() {
           <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
         </svg>
       ),
-    },
-    {
-      href: '/inventory',
-      label: 'Stock',
+    } : {
+      href: '/orders',
+      label: 'Orders',
       icon: (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-        </svg>
-      ),
-    },
-    {
-      href: '/customers',
-      label: 'Customers',
-      icon: (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-          <circle cx="9" cy="7" r="4"/>
-          <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+          <rect x="8" y="2" width="8" height="4" rx="1"/>
+          <path d="M9 12h6M9 16h6"/>
         </svg>
       ),
     },
@@ -71,7 +73,18 @@ export default function BottomNav() {
         </svg>
       ),
     },
-    {
+    cashier ? {
+      href: '/',
+      label: 'Log Out',
+      onClick: logoutCashier,
+      icon: (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+          <polyline points="16 17 21 12 16 7"/>
+          <line x1="21" y1="12" x2="9" y2="12"/>
+        </svg>
+      ),
+    } : {
       href: user ? '/profile' : '/auth/login',
       label: user ? 'Profile' : 'Login',
       icon: user ? (
@@ -91,11 +104,17 @@ export default function BottomNav() {
   return (
     <nav className="bottom-nav">
       {items.map(item => {
-        const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
-        return (
+        const isActive = item.href === '/' ? pathname === '/' : (pathname?.startsWith(item.href) ?? false);
+        const onClick  = (item as { onClick?: () => void }).onClick;
+        return onClick ? (
+          <button key={item.label} className="nav-item" onClick={onClick} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+            {item.icon}
+            <span>{item.label}</span>
+          </button>
+        ) : (
           <Link key={item.href} href={item.href} className={`nav-item ${isActive ? 'active' : ''}`}>
             {item.icon}
-            {item.badge != null && (
+            {mounted && item.badge != null && (
               <span className="badge nav-badge">{item.badge}</span>
             )}
             <span>{item.label}</span>

@@ -1,0 +1,556 @@
+'use client';
+
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import Header from '@/components/Header';
+import { useApp } from '@/context/AppContext';
+import type { Customer } from '@/lib/types';
+
+/* ─── constants ──────────────────────────────────── */
+const LOCAL_KEY = 'mogarenta_customers';
+const AVATAR_COLORS = ['#4F46E5','#7C3AED','#DB2777','#EA580C','#16A34A','#0891B2','#D97706','#6366F1'];
+
+function initials(name: string) {
+  return name.trim().split(/\s+/).map(w => w[0]?.toUpperCase() ?? '').slice(0, 2).join('');
+}
+function avatarBg(name: string) {
+  return AVATAR_COLORS[name.charCodeAt(0) % AVATAR_COLORS.length];
+}
+function makeId() {
+  return `local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+const emptyForm = { name: '', phone: '', email: '', address: '', notes: '' };
+type FormState = typeof emptyForm;
+
+/* ─── Invoice item ───────────────────────────────── */
+interface InvItem {
+  productId: number;
+  name: string;
+  price: number;
+  qty: number;
+}
+
+/* ─── Component ──────────────────────────────────── */
+export default function CustomersPage() {
+  const { state, toast } = useApp();
+  const products = state.products;
+
+  /* customers state */
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [search,    setSearch]    = useState('');
+  const [loading,   setLoading]   = useState(true);
+
+  /* form / CRUD state */
+  const [showForm,   setShowForm]   = useState(false);
+  const [editingId,  setEditingId]  = useState<string | null>(null);
+  const [form,       setForm]       = useState<FormState>(emptyForm);
+  const [saving,     setSaving]     = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  /* invoice state */
+  const [invoiceCust, setInvoiceCust] = useState<Customer | null>(null);
+  const [invItems,    setInvItems]    = useState<InvItem[]>([]);
+  const [invDiscount, setInvDiscount] = useState('0');
+  const [invPayment,  setInvPayment]  = useState('cash');
+  const [invNotes,    setInvNotes]    = useState('');
+  const [savingInv,   setSavingInv]   = useState(false);
+
+  /* ── Load: API first, localStorage fallback ─────── */
+  useEffect(() => {
+    (async () => {
+      try {
+        const res  = await fetch('/api/customers');
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setCustomers(data);
+          localStorage.setItem(LOCAL_KEY, JSON.stringify(data));
+          setLoading(false);
+          return;
+        }
+      } catch {}
+      /* fallback to localStorage */
+      try {
+        const raw = localStorage.getItem(LOCAL_KEY);
+        if (raw) setCustomers(JSON.parse(raw));
+      } catch {}
+      setLoading(false);
+    })();
+  }, []);
+
+  /* ── Persist helper ──────────────────────────────── */
+  const persist = useCallback((updated: Customer[]) => {
+    setCustomers(updated);
+    localStorage.setItem(LOCAL_KEY, JSON.stringify(updated));
+  }, []);
+
+  /* ── CRUD ────────────────────────────────────────── */
+  function openAdd() { setEditingId(null); setForm(emptyForm); setShowForm(true); }
+  function openEdit(c: Customer) {
+    setEditingId(c.id);
+    setForm({ name: c.name, phone: c.phone, email: c.email, address: c.address, notes: c.notes });
+    setShowForm(true);
+  }
+
+  const sf = (k: keyof FormState, v: string) => setForm(f => ({ ...f, [k]: v }));
+
+  async function handleSave() {
+    if (!form.name.trim()) { toast('Name is required', 'error'); return; }
+    setSaving(true);
+
+    if (editingId) {
+      /* try API first */
+      try {
+        const res = await fetch(`/api/customers/${editingId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(form),
+        });
+        if (res.ok) {
+          const updated = await res.json() as Customer;
+          persist(customers.map(c => c.id === editingId ? updated : c));
+          toast('Customer updated ✓', 'success');
+          setSaving(false); setShowForm(false); return;
+        }
+      } catch {}
+      /* local fallback */
+      persist(customers.map(c => c.id === editingId ? { ...c, ...form } : c));
+      toast('Customer updated ✓', 'success');
+    } else {
+      /* try API first */
+      try {
+        const res = await fetch('/api/customers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(form),
+        });
+        if (res.ok) {
+          const newC = await res.json() as Customer;
+          persist([newC, ...customers]);
+          toast('Customer added ✓', 'success');
+          setSaving(false); setShowForm(false); return;
+        }
+      } catch {}
+      /* local fallback — still usable without DB */
+      const newC: Customer = {
+        id: makeId(), ...form, createdAt: new Date().toISOString(),
+      };
+      persist([newC, ...customers]);
+      toast('Customer added ✓', 'success');
+    }
+    setSaving(false);
+    setShowForm(false);
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm('Delete this customer?')) return;
+    setDeletingId(id);
+    try {
+      await fetch(`/api/customers/${id}`, { method: 'DELETE' });
+    } catch {}
+    persist(customers.filter(c => c.id !== id));
+    setDeletingId(null);
+    toast('Customer deleted', 'default');
+  }
+
+  /* ── Invoice helpers ─────────────────────────────── */
+  function openInvoice(c: Customer) {
+    setInvoiceCust(c);
+    setInvItems([]); setInvDiscount('0'); setInvPayment('cash'); setInvNotes('');
+  }
+
+  function addProduct(productId: number) {
+    const p = products.find(x => x.id === productId);
+    if (!p) return;
+    setInvItems(prev => {
+      const exists = prev.find(i => i.productId === productId);
+      if (exists) return prev.map(i => i.productId === productId ? { ...i, qty: i.qty + 1 } : i);
+      return [...prev, { productId, name: p.name, price: p.price, qty: 1 }];
+    });
+  }
+
+  function changeQty(productId: number, delta: number) {
+    setInvItems(prev =>
+      prev.map(i => i.productId === productId ? { ...i, qty: Math.max(1, i.qty + delta) } : i)
+    );
+  }
+
+  function removeItem(productId: number) {
+    setInvItems(prev => prev.filter(i => i.productId !== productId));
+  }
+
+  const invSubtotal    = invItems.reduce((s, i) => s + i.price * i.qty, 0);
+  const invDiscountAmt = Math.min(Math.max(parseFloat(invDiscount) || 0, 0), invSubtotal);
+  const invTotal       = invSubtotal - invDiscountAmt;
+
+  async function handleSaveAsOrder() {
+    if (!invoiceCust || invItems.length === 0) { toast('Add at least one product', 'error'); return; }
+    setSavingInv(true);
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerName:  invoiceCust.name,
+          customerPhone: invoiceCust.phone,
+          items:         invItems.map(i => ({ id: i.productId, qty: i.qty })),
+          subtotal:      invSubtotal,
+          discount:      invDiscountAmt,
+          total:         invTotal,
+          paymentMethod: invPayment,
+          status:        'completed',
+          notes:         invNotes,
+        }),
+      });
+      if (res.ok) { toast('Order saved ✓', 'success'); setInvoiceCust(null); }
+      else         { toast('Failed to save order', 'error'); }
+    } catch {
+      toast('Failed to save order', 'error');
+    }
+    setSavingInv(false);
+  }
+
+  function handlePrint() {
+    if (!invoiceCust || invItems.length === 0) { toast('Add at least one product', 'error'); return; }
+
+    let storeName = 'Mogarenta Store';
+    try { storeName = JSON.parse(localStorage.getItem('mogarenta_settings') || '{}').storeName || storeName; } catch {}
+
+    const invNum = `INV-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
+    const date   = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
+    const rows = invItems.map(i => `
+      <tr>
+        <td>${i.name}</td>
+        <td class="center">${i.qty}</td>
+        <td class="right">$${i.price.toFixed(2)}</td>
+        <td class="right"><strong>$${(i.price * i.qty).toFixed(2)}</strong></td>
+      </tr>`).join('');
+
+    const html = `<!DOCTYPE html><html><head>
+<meta charset="UTF-8">
+<title>Invoice – ${invoiceCust.name}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;padding:48px;max-width:700px;margin:0 auto}
+  h1{font-size:1.6rem;font-weight:800;color:#4F46E5}
+  .header{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:24px;border-bottom:2.5px solid #4F46E5;margin-bottom:28px}
+  .brand-sub{font-size:.82rem;color:#64748b;margin-top:5px}
+  .inv-num{font-size:1rem;font-weight:700;color:#0f172a}
+  .inv-date{font-size:.82rem;color:#64748b;margin-top:5px}
+  .bill-section{margin-bottom:28px}
+  .section-label{font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#94a3b8;margin-bottom:8px}
+  .bill-name{font-size:1.1rem;font-weight:700}
+  .bill-detail{font-size:.85rem;color:#475569;margin-top:4px;line-height:1.6}
+  table{width:100%;border-collapse:collapse;margin-bottom:24px}
+  th{font-size:.65rem;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;padding:10px 12px;border-bottom:1.5px solid #e2e8f0;text-align:left}
+  td{padding:11px 12px;border-bottom:1px solid #f1f5f9;font-size:.88rem;vertical-align:middle}
+  .center{text-align:center}.right{text-align:right}
+  .totals{margin-left:auto;width:260px}
+  .t-row{display:flex;justify-content:space-between;padding:7px 0;font-size:.88rem;color:#64748b;border-bottom:1px solid #f1f5f9}
+  .t-row.disc{color:#dc2626}
+  .t-row.final{border-top:2px solid #0f172a;border-bottom:none;margin-top:8px;padding-top:14px;font-size:1.15rem;font-weight:800;color:#0f172a}
+  .footer{margin-top:40px;padding-top:20px;border-top:1px solid #e2e8f0;font-size:.78rem;color:#94a3b8;text-align:center;line-height:1.8}
+  .pay-tag{display:inline-block;background:#eef2ff;color:#4F46E5;padding:3px 12px;border-radius:99px;font-size:.75rem;font-weight:700;margin-bottom:8px}
+  @media print{body{padding:20px}}
+</style></head><body>
+<div class="header">
+  <div><h1>🏪 ${storeName}</h1><div class="brand-sub">Official Tax Invoice</div></div>
+  <div><div class="inv-num">${invNum}</div><div class="inv-date">${date}</div></div>
+</div>
+<div class="bill-section">
+  <div class="section-label">Bill To</div>
+  <div class="bill-name">${invoiceCust.name}</div>
+  <div class="bill-detail">
+    📞 ${invoiceCust.phone}
+    ${invoiceCust.email   ? `<br>✉️ ${invoiceCust.email}`   : ''}
+    ${invoiceCust.address ? `<br>📍 ${invoiceCust.address}` : ''}
+  </div>
+</div>
+<table>
+  <thead><tr><th>Product</th><th class="center">Qty</th><th class="right">Unit Price</th><th class="right">Amount</th></tr></thead>
+  <tbody>${rows}</tbody>
+</table>
+<div class="totals">
+  <div class="t-row"><span>Subtotal</span><span>$${invSubtotal.toFixed(2)}</span></div>
+  ${invDiscountAmt > 0 ? `<div class="t-row disc"><span>Discount</span><span>-$${invDiscountAmt.toFixed(2)}</span></div>` : ''}
+  <div class="t-row final"><span>Total Due</span><span>$${invTotal.toFixed(2)}</span></div>
+</div>
+<div class="footer">
+  <div class="pay-tag">Payment: ${invPayment.charAt(0).toUpperCase() + invPayment.slice(1)}</div>
+  ${invNotes ? `<p style="margin-top:8px;font-style:italic">"${invNotes}"</p>` : ''}
+  <p style="margin-top:16px">Thank you for your business! 🙏</p>
+</div>
+</body></html>`;
+
+    const win = window.open('', '_blank', 'width=820,height=680');
+    if (win) {
+      win.document.write(html);
+      win.document.close();
+      setTimeout(() => win.print(), 600);
+    }
+  }
+
+  /* ── Filtered list ───────────────────────────────── */
+  const filtered = useMemo(() => {
+    if (!search.trim()) return customers;
+    const q = search.toLowerCase();
+    return customers.filter(c =>
+      c.name.toLowerCase().includes(q) ||
+      c.phone.includes(q) ||
+      c.email.toLowerCase().includes(q)
+    );
+  }, [customers, search]);
+
+  /* ── Render ──────────────────────────────────────── */
+  return (
+    <div className="page-anim">
+      <Header showSearch={false} />
+
+      <div className="page-title-bar">
+        <span className="page-title">👥 Customers</span>
+        <button className="btn btn-primary btn-sm" onClick={openAdd}>+ Add Customer</button>
+      </div>
+      <p className="page-subtitle">{customers.length} customer{customers.length !== 1 ? 's' : ''}</p>
+
+      {/* Search */}
+      {customers.length > 3 && (
+        <div style={{ padding: '0 16px 12px' }}>
+          <input
+            className="form-input"
+            placeholder="Search by name, phone or email…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
+      )}
+
+      {/* List */}
+      <div className="cust-list">
+        {loading ? (
+          Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="cust-card">
+              <div className="skeleton" style={{ width: 50, height: 50, borderRadius: '50%', flexShrink: 0 }} />
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div className="skeleton" style={{ height: 13, width: '45%', borderRadius: 6 }} />
+                <div className="skeleton" style={{ height: 11, width: '30%', borderRadius: 6 }} />
+              </div>
+            </div>
+          ))
+        ) : filtered.length === 0 && customers.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-icon">👥</div>
+            <div className="empty-title">No customers yet</div>
+            <div className="empty-sub">Add your first customer to create invoices</div>
+            <button className="btn btn-primary" style={{ marginTop: 14 }} onClick={openAdd}>
+              Add First Customer
+            </button>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-icon">🔍</div>
+            <div className="empty-title">No results</div>
+            <div className="empty-sub">Try a different name or number</div>
+          </div>
+        ) : (
+          filtered.map(c => (
+            <div key={c.id} className="cust-card">
+              <div className="cust-avatar" style={{ background: avatarBg(c.name) }}>
+                {initials(c.name)}
+              </div>
+              <div className="cust-info">
+                <div className="cust-name">{c.name}</div>
+                {c.phone   && <div className="cust-phone">📞 {c.phone}</div>}
+                {c.email   && <div className="cust-detail">✉️ {c.email}</div>}
+                {c.address && <div className="cust-detail">📍 {c.address}</div>}
+                {c.notes   && <div className="cust-notes">{c.notes}</div>}
+              </div>
+              <div className="cust-actions">
+                <button
+                  className="btn btn-primary btn-sm"
+                  style={{ fontSize: '.75rem', padding: '6px 10px' }}
+                  onClick={() => openInvoice(c)}
+                >📋 Invoice</button>
+                <button className="btn btn-ghost btn-sm crud-edit-btn" onClick={() => openEdit(c)}>✏️</button>
+                <button
+                  className="btn btn-ghost btn-sm crud-del-btn"
+                  onClick={() => handleDelete(c.id)}
+                  disabled={deletingId === c.id}
+                >{deletingId === c.id ? '…' : '🗑️'}</button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* ── Add / Edit Modal ─────────────────────────── */}
+      {showForm && (
+        <div className="modal-overlay" onClick={() => !saving && setShowForm(false)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span>{editingId ? '✏️ Edit Customer' : '➕ New Customer'}</span>
+              <button className="modal-close" onClick={() => setShowForm(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="form-label">Full Name *</label>
+                <input className="form-input" placeholder="e.g. Ahmed Hassan" value={form.name} onChange={e => sf('name', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Phone Number *</label>
+                <input className="form-input" placeholder="+252 61 234 5678" value={form.phone} onChange={e => sf('phone', e.target.value)} inputMode="tel" />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div className="form-group">
+                  <label className="form-label">Email</label>
+                  <input className="form-input" type="email" placeholder="email@example.com" value={form.email} onChange={e => sf('email', e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Address</label>
+                  <input className="form-input" placeholder="City, Street" value={form.address} onChange={e => sf('address', e.target.value)} />
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Notes</label>
+                <textarea className="form-input" rows={2} style={{ resize: 'vertical', fontFamily: 'inherit' }} placeholder="VIP customer, payment terms…" value={form.notes} onChange={e => sf('notes', e.target.value)} />
+              </div>
+              <button className="btn btn-primary btn-full btn-lg" onClick={handleSave} disabled={saving}>
+                {saving ? 'Saving…' : editingId ? 'Update Customer' : 'Add Customer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Invoice Modal ─────────────────────────────── */}
+      {invoiceCust && (
+        <div className="modal-overlay" onClick={() => setInvoiceCust(null)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span>📋 Create Invoice</span>
+              <button className="modal-close" onClick={() => setInvoiceCust(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+
+              {/* Customer banner */}
+              <div className="inv-cust-banner">
+                <div className="inv-cust-avatar" style={{ background: avatarBg(invoiceCust.name) }}>
+                  {initials(invoiceCust.name)}
+                </div>
+                <div>
+                  <div className="inv-cust-name">{invoiceCust.name}</div>
+                  <div className="inv-cust-phone">📞 {invoiceCust.phone}</div>
+                </div>
+              </div>
+
+              {/* Product selector */}
+              <div className="form-group">
+                <label className="form-label">Add Product</label>
+                <select
+                  className="form-input"
+                  defaultValue=""
+                  onChange={e => {
+                    if (e.target.value) {
+                      addProduct(parseInt(e.target.value, 10));
+                      e.target.value = '';
+                    }
+                  }}
+                >
+                  <option value="" disabled>Select a product to add…</option>
+                  {products.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} — ${p.price.toFixed(2)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Items list */}
+              {invItems.length > 0 && (
+                <div className="inv-items-list">
+                  {invItems.map(item => (
+                    <div key={item.productId} className="inv-item-row">
+                      <span className="inv-item-icon">📦</span>
+                      <div className="inv-item-info">
+                        <div className="inv-item-name">{item.name}</div>
+                        <div className="inv-item-uprice">${item.price.toFixed(2)} ea</div>
+                      </div>
+                      <div className="inv-qty-ctrl">
+                        <button className="inv-qty-btn" onClick={() => changeQty(item.productId, -1)}>−</button>
+                        <span className="inv-qty-val">{item.qty}</span>
+                        <button className="inv-qty-btn" onClick={() => changeQty(item.productId,  1)}>+</button>
+                      </div>
+                      <span className="inv-line-total">${(item.price * item.qty).toFixed(2)}</span>
+                      <button className="inv-remove-btn" onClick={() => removeItem(item.productId)}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Discount + Payment */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 4 }}>
+                <div className="form-group">
+                  <label className="form-label">Discount ($)</label>
+                  <input className="form-input" type="number" min="0" step="0.01" placeholder="0.00" value={invDiscount} onChange={e => setInvDiscount(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Payment Method</label>
+                  <select className="form-input" value={invPayment} onChange={e => setInvPayment(e.target.value)}>
+                    <option value="waafi">📱 Waafi</option>
+                    <option value="cash">💵 Cash</option>
+                    <option value="card">💳 Card</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Notes / Terms</label>
+                <textarea className="form-input" rows={2} style={{ resize: 'vertical', fontFamily: 'inherit' }} placeholder="Payment terms, delivery info, thank-you note…" value={invNotes} onChange={e => setInvNotes(e.target.value)} />
+              </div>
+
+              {/* Totals */}
+              {invItems.length > 0 && (
+                <div className="inv-totals-box">
+                  <div className="inv-total-row">
+                    <span>Subtotal</span>
+                    <span>${invSubtotal.toFixed(2)}</span>
+                  </div>
+                  {invDiscountAmt > 0 && (
+                    <div className="inv-total-row disc">
+                      <span>Discount</span>
+                      <span>−${invDiscountAmt.toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className="inv-total-row final">
+                    <span>Total Due</span>
+                    <span>${invTotal.toFixed(2)}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+                <button
+                  className="btn btn-primary"
+                  style={{ flex: 1 }}
+                  onClick={handlePrint}
+                  disabled={invItems.length === 0}
+                >
+                  🖨️ Print Invoice
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  style={{ flex: 1 }}
+                  onClick={handleSaveAsOrder}
+                  disabled={invItems.length === 0 || savingInv}
+                >
+                  {savingInv ? '…' : '✅ Save as Order'}
+                </button>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

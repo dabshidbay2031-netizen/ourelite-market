@@ -1,6 +1,8 @@
 'use client';
 
 import React, { createContext, useContext, useReducer, useCallback, useEffect, useRef } from 'react';
+import { useAuth } from '@/context/AuthContext';
+import { useLiveRefresh } from '@/lib/useLiveRefresh';
 import type { CartItem, Notification, Order, Product, Supplier, Toast, PaymentMethod, PaymentState } from '@/lib/types';
 
 interface InventoryItem { id: number; stock: number; }
@@ -20,6 +22,23 @@ function readCache<T>(key: string): T | null {
 }
 function writeCache(key: string, data: unknown) {
   try { localStorage.setItem(key, JSON.stringify(data)); } catch { /* storage full */ }
+}
+
+/* ETag per endpoint from the last 200 response. The live poll re-fetches the
+   full catalog (~500 KB) every 15 s; sending If-None-Match lets the server
+   reply 304 so unchanged payloads are never re-downloaded, re-dispatched
+   (full grid re-render), or re-written to localStorage. */
+const etags: Record<string, string> = {};
+
+/** Fetch that resolves to undefined when the server says the data is unchanged (304). */
+async function fetchIfChanged(url: string, signal?: AbortSignal): Promise<unknown> {
+  const headers: Record<string, string> = {};
+  if (etags[url]) headers['If-None-Match'] = etags[url];
+  const res = await fetch(url, { cache: 'no-store', headers, signal });
+  if (res.status === 304) return undefined;
+  const tag = res.headers.get('etag');
+  if (tag) etags[url] = tag;
+  return res.json();
 }
 
 interface AppState {
@@ -45,6 +64,7 @@ type Action =
   | { type: 'SET_CART';          payload: CartItem[] }
   | { type: 'SET_WISHLIST';      payload: number[] }
   | { type: 'SET_INVENTORY';     payload: InventoryItem[] }
+  | { type: 'SET_STOCK';         payload: InventoryItem }
   | { type: 'SET_NOTIFICATIONS'; payload: Notification[] }
   | { type: 'SET_PAYMENT_METHOD';payload: PaymentMethod }
   | { type: 'SET_PAYMENT_STATE'; payload: PaymentState }
@@ -72,6 +92,11 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_CART':          return { ...state, cart:          action.payload };
     case 'SET_WISHLIST':      return { ...state, wishlist:      action.payload };
     case 'SET_INVENTORY':     return { ...state, inventory:     action.payload };
+    case 'SET_STOCK':         return {
+      ...state,
+      inventory: state.inventory.map(i =>
+        i.id === action.payload.id ? { ...i, stock: action.payload.stock } : i),
+    };
     case 'SET_NOTIFICATIONS': return { ...state, notifications: action.payload };
     case 'SET_PAYMENT_METHOD':return { ...state, paymentMethod: action.payload };
     case 'SET_PAYMENT_STATE': return { ...state, paymentState:  action.payload };
@@ -106,6 +131,8 @@ interface AppContextValue {
   reloadProducts:      () => Promise<void>;
   reloadSuppliers:     () => Promise<void>;
   loadWishlistFromDB:  (userId: string) => Promise<void>;
+  /** True once the DB wishlist has been merged after login — gate for pushing sync writes */
+  wishlistLoaded:      boolean;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -113,6 +140,19 @@ const AppContext = createContext<AppContextValue | null>(null);
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initial);
   const toastTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // Mirrors state.toasts for the toast() callback below (kept stable with []
+  // deps) so repeated triggers can find/refresh an existing toast instead of
+  // reading a stale closure.
+  const toastsRef = useRef(state.toasts);
+  useEffect(() => { toastsRef.current = state.toasts; }, [state.toasts]);
+  const [wishlistLoaded, setWishlistLoaded] = React.useState(false);
+
+  // The signed-in seller's own store id, if any. A business/supplier must not
+  // be able to buy products their own store sells (self-purchase). Held in a
+  // ref so addToCart can read it without widening its dependency list.
+  const { currentSupplier } = useAuth();
+  const ownStoreIdRef = useRef<number | null>(null);
+  ownStoreIdRef.current = currentSupplier?.id ?? null;
 
   /* ── Load data: serve cache instantly, fetch fresh in background ── */
   useEffect(() => {
@@ -132,24 +172,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Safety timeout — never let loading spin forever
     const safetyTimer = setTimeout(() => {
       dispatch({ type: 'SET_LOADING', payload: false });
-    }, 8000);
+    }, 22000);
 
     // 2. Fetch fresh data in background (stale-while-revalidate)
     async function loadFresh() {
       try {
         const ctrl = new AbortController();
-        const timeout = setTimeout(() => ctrl.abort(), 7000);
-
-        const [pRes, sRes, nRes] = await Promise.all([
-          fetch('/api/products',     { signal: ctrl.signal }),
-          fetch('/api/suppliers',    { signal: ctrl.signal }),
-          fetch('/api/notifications',{ signal: ctrl.signal }),
-        ]);
-        clearTimeout(timeout);
+        // 20s budget: dev cold-compiles and slow mobile connections were
+        // regularly blowing through the old 7s limit, leaving an empty
+        // catalog until a manual reload.
+        const timeout = setTimeout(() => ctrl.abort(), 20000);
 
         const [products, suppliers, notifications] = await Promise.all([
-          pRes.json(), sRes.json(), nRes.json(),
+          fetchIfChanged('/api/products',      ctrl.signal),
+          fetchIfChanged('/api/suppliers',     ctrl.signal),
+          fetchIfChanged('/api/notifications', ctrl.signal),
         ]);
+        clearTimeout(timeout);
 
         // Always update products from DB — even empty array clears stale cache
         if (Array.isArray(products)) {
@@ -188,9 +227,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { writeCache('mg_wishlist', state.wishlist); }, [state.wishlist]);
 
   /* ── Toast ───────────────────────────────────────────────── */
+  // Triggering the SAME message+type repeatedly (rapid "Add to Cart" clicks, a
+  // retried failing action, etc.) must not pile up a stack of duplicate
+  // bubbles — refresh the existing one's timer instead of adding another.
   const toast = useCallback((message: string, type: Toast['type'] = 'default') => {
-    const id = `${Date.now()}-${Math.random()}`;
-    dispatch({ type: 'ADD_TOAST', payload: { id, message, type } });
+    const dup = toastsRef.current.find(t => t.message === message && t.type === type);
+    const id  = dup?.id ?? `${Date.now()}-${Math.random()}`;
+
+    const oldTimer = toastTimers.current.get(id);
+    if (oldTimer) clearTimeout(oldTimer);
+
+    if (!dup) dispatch({ type: 'ADD_TOAST', payload: { id, message, type } });
+
     const timer = setTimeout(() => {
       dispatch({ type: 'REMOVE_TOAST', payload: id });
       toastTimers.current.delete(id);
@@ -210,6 +258,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   /* ── Cart ────────────────────────────────────────────────── */
   const addToCart = useCallback((productId: number, qty = 1) => {
+    // Block self-purchase: a seller can't buy products their own store sells.
+    const prod = state.products.find(x => x.id === productId);
+    if (prod && ownStoreIdRef.current != null && prod.supplierId === ownStoreIdRef.current) {
+      toast("You can't buy products from your own store", 'error');
+      return;
+    }
     const stock    = state.inventory.find(i => i.id === productId)?.stock ?? 0;
     const inCart   = state.cart.find(i => i.id === productId);
     const inCartQty= inCart?.qty ?? 0;
@@ -219,7 +273,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       : [...state.cart, { id: productId, qty }];
     dispatch({ type: 'SET_CART', payload: updated });
     const p = state.products.find(x => x.id === productId);
-    toast(`${p?.name} added to cart ✓`, 'success');
+    toast(p ? `${p.name} added to cart ✓` : 'Added to cart ✓', 'success');
   }, [state.cart, state.inventory, state.products, toast]);
 
   const removeFromCart = useCallback((id: number) =>
@@ -251,29 +305,44 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   /** Load wishlist from DB (call after user logs in) */
   const loadWishlistFromDB = useCallback(async (userId: string) => {
     try {
-      const res = await fetch(`/api/wishlist?userId=${userId}`);
-      const ids = await res.json();
-      if (Array.isArray(ids) && ids.length > 0) {
-        // Merge DB wishlist with local wishlist
-        const merged = Array.from(new Set([...state.wishlist, ...ids]));
-        dispatch({ type: 'SET_WISHLIST', payload: merged });
-        writeCache('mg_wishlist', merged);
+      const res = await fetch(`/api/wishlist?userId=${encodeURIComponent(userId)}`);
+      if (res.ok) {
+        const ids = await res.json();
+        if (Array.isArray(ids)) {
+          // One-time merge of DB + local on login
+          const merged = Array.from(new Set([...state.wishlist, ...ids]));
+          dispatch({ type: 'SET_WISHLIST', payload: merged });
+          writeCache('mg_wishlist', merged);
+        }
+        // Only after a successful load may WishlistSync push writes —
+        // otherwise an early empty sync would wipe the DB wishlist.
+        setWishlistLoaded(true);
       }
-    } catch { /* ignore — local wishlist is fine */ }
+    } catch { /* ignore — local wishlist is fine; sync stays gated */ }
   }, [state.wishlist]);
 
   /* ── Inventory ───────────────────────────────────────────── */
   const adjustStock = useCallback((productId: number, delta: number) => {
+    // Optimistic local update
     const updated = state.inventory.map(i =>
       i.id === productId ? { ...i, stock: Math.max(0, i.stock + delta) } : i
     );
     dispatch({ type: 'SET_INVENTORY', payload: updated });
-    const newStock = updated.find(i => i.id === productId)?.stock ?? 0;
+    // Send the RELATIVE change — the server applies it atomically and
+    // returns the authoritative value, so concurrent sessions can't
+    // overwrite each other with stale absolute numbers.
     fetch(`/api/inventory/${productId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stock: newStock }),
-    }).catch(() => {});
+      body: JSON.stringify({ delta }),
+    })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (d && typeof d.stock === 'number') {
+          dispatch({ type: 'SET_STOCK', payload: { id: productId, stock: d.stock } });
+        }
+      })
+      .catch(() => {});
   }, [state.inventory]);
 
   /* ── Notifications ───────────────────────────────────────── */
@@ -295,8 +364,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   /* ── Data reload ─────────────────────────────────────────── */
   const reloadProducts = useCallback(async () => {
     try {
-      const res      = await fetch('/api/products');
-      const products = await res.json();
+      // fetchIfChanged is no-store: this also runs right after a create/edit/
+      // delete, so we must bypass the catalog's s-maxage cache or we'd
+      // re-read stale data. 304 (undefined) → nothing changed, skip.
+      const products = await fetchIfChanged('/api/products');
       if (Array.isArray(products) && products.length) {
         dispatch({ type: 'SET_PRODUCTS',  payload: products });
         dispatch({ type: 'SET_INVENTORY', payload: products.map((p: Product) => ({ id: p.id, stock: p.stock })) });
@@ -307,14 +378,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const reloadSuppliers = useCallback(async () => {
     try {
-      const res       = await fetch('/api/suppliers');
-      const suppliers = await res.json();
+      const suppliers = await fetchIfChanged('/api/suppliers');
       if (Array.isArray(suppliers) && suppliers.length) {
         dispatch({ type: 'SET_SUPPLIERS', payload: suppliers });
         writeCache(CACHE.suppliers, suppliers);
       }
     } catch { /* ignore */ }
   }, []);
+
+  const reloadNotifications = useCallback(async () => {
+    try {
+      const data = await fetchIfChanged('/api/notifications');
+      if (Array.isArray(data)) {
+        dispatch({ type: 'SET_NOTIFICATIONS', payload: data });
+        writeCache(CACHE.notifications, data);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  /* ── Live: keep global catalog, suppliers + alerts fresh without a manual
+     reload (polls while visible + on tab focus; see useLiveRefresh). ── */
+  useLiveRefresh(() => {
+    reloadProducts();
+    reloadSuppliers();
+    reloadNotifications();
+  }, { intervalMs: 15000 });
 
   /* ── Payment ─────────────────────────────────────────────── */
   const setPaymentMethod = useCallback((m: PaymentMethod) => dispatch({ type: 'SET_PAYMENT_METHOD', payload: m }), []);
@@ -330,7 +418,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       markAllRead, clearNotifications, unreadCount,
       setPaymentMethod, setPaymentState, setDiscount,
       toast,
-      reloadProducts, reloadSuppliers, loadWishlistFromDB,
+      reloadProducts, reloadSuppliers, loadWishlistFromDB, wishlistLoaded,
     }}>
       {children}
     </AppContext.Provider>

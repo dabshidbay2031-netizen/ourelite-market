@@ -1,34 +1,38 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { Link } from '@/lib/hashRouter';
+import { usePathname, useRouter } from '@/lib/hashRouter';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
+import { useCashier } from '@/context/CashierContext';
+import { roleFor, isBusinessRoute } from '@/lib/roles';
+import { cashierCanAccess } from '@/lib/cashierPrivileges';
+import { useIsAdmin } from '@/lib/useIsAdmin';
 
 export default function Sidebar() {
   const pathname = usePathname();
   const router   = useRouter();
   const { unreadCount, cartCount, setCartOpen } = useApp();
-  const { user } = useAuth();
+  const { user, accountType, signOut } = useAuth();
+  const { cashier, logoutCashier } = useCashier();
+  const { isAdmin } = useIsAdmin();
+
+  async function handleLogout() {
+    await signOut();
+    router.push('/auth/login');
+  }
+  // A cashier session governs even if a stale owner session lingers (see GuardedApp).
+  const role      = cashier ? 'business' : roleFor(!!user, accountType);
   const notifs    = unreadCount();
   const cartItems = cartCount();
+  
+  // Desktop-only component: below 960px the CSS hides .sidebar entirely and
+  // mobile navigation is the Header drawer + BottomNav. (The old mobile
+  // toggle here showed a full-screen overlay over an invisible sidebar.)
+  const [mounted, setMounted] = useState(false);
 
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
-
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 960);
-    };
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
-  }, []);
-
-  useEffect(() => {
-    setSidebarOpen(false);
-  }, [pathname]);
+  useEffect(() => { setMounted(true); }, []);
 
   const items = [
     {
@@ -41,7 +45,7 @@ export default function Sidebar() {
       ),
     },
     {
-      href: '/dashboard',
+      href: '/my-dashboard',
       label: 'Dashboard',
       icon: (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -52,9 +56,32 @@ export default function Sidebar() {
         </svg>
       ),
     },
+    // Global (all-businesses) dashboard — admins only
+    ...(isAdmin ? [{
+      href: '/dashboard',
+      label: 'Global Dashboard',
+      badge: undefined as number | undefined,
+      icon: (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+        </svg>
+      ),
+    }] : []),
     {
       href: '/customers',
       label: 'Customers',
+      icon: (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+      ),
+    },
+    {
+      href: '/staff',
+      label: 'Staff',
       icon: (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
@@ -92,6 +119,16 @@ export default function Sidebar() {
         </svg>
       ),
     },
+    ...(user || cashier ? [{
+      href: '/chat',
+      label: 'Chat',
+      badge: undefined as number | undefined,
+      icon: (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+      ),
+    }] : []),
     {
       href: '/notifications',
       label: 'Alerts',
@@ -103,7 +140,7 @@ export default function Sidebar() {
         </svg>
       ),
     },
-    ...(user ? [{
+    ...(user || cashier ? [{
       href: '/orders',
       label: 'Orders',
       badge: undefined as number | undefined,
@@ -117,16 +154,6 @@ export default function Sidebar() {
         </svg>
       ),
     }] : []),
-    {
-      href: '/chat',
-      label: 'Chat',
-      badge: undefined as number | undefined,
-      icon: (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-        </svg>
-      ),
-    },
     {
       href: '/settings',
       label: 'Settings',
@@ -158,36 +185,8 @@ export default function Sidebar() {
 
   return (
     <>
-      {isMobile && (
-        <button
-          className="sidebar-toggle"
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-          title={sidebarOpen ? 'Close menu' : 'Open menu'}
-        >
-          {sidebarOpen ? (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          ) : (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <line x1="3" y1="6" x2="21" y2="6"/>
-              <line x1="3" y1="12" x2="21" y2="12"/>
-              <line x1="3" y1="18" x2="21" y2="18"/>
-            </svg>
-          )}
-        </button>
-      )}
-
-      {isMobile && sidebarOpen && (
-        <div
-          className="sidebar-overlay"
-          onClick={() => setSidebarOpen(false)}
-          style={{ position: 'fixed', inset: 0, zIndex: 250, background: 'rgba(0,0,0,.3)' }}
-        />
-      )}
-
-      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
+      <aside className="sidebar">
+        {/* Logo + search shortcut */}
         <div className="sidebar-logo">
           <Link href="/" className="sidebar-logo-link">
             <div className="sidebar-logo-icon">
@@ -205,14 +204,19 @@ export default function Sidebar() {
           </button>
         </div>
 
+        {/* Nav items — store-operations links are business-only, and a cashier
+            session is further narrowed to only the privileges they were granted */}
         <nav className="sidebar-nav">
-          {items.map(item => {
-            const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
+          {items
+            .filter(item => !isBusinessRoute(item.href) || role === 'business')
+            .filter(item => !cashier || cashierCanAccess(item.href, cashier.privileges))
+            .map(item => {
+            const isActive = item.href === '/' ? pathname === '/' : (pathname?.startsWith(item.href) ?? false);
             return (
               <Link key={item.href} href={item.href} className={`sidebar-item ${isActive ? 'active' : ''}`}>
                 <span className="sidebar-item-icon">{item.icon}</span>
                 <span className="sidebar-item-label">{item.label}</span>
-                {item.badge != null && item.badge > 0 && (
+                {mounted && item.badge != null && item.badge > 0 && (
                   <span className="sidebar-badge">{item.badge}</span>
                 )}
               </Link>
@@ -220,7 +224,18 @@ export default function Sidebar() {
           })}
         </nav>
 
+        {/* Cart button */}
         <div className="sidebar-footer">
+          {cashier && (
+            <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-light)', marginBottom: 4 }}>
+              <div style={{ fontSize: '.78rem', color: 'var(--text-light)' }}>Logged in as</div>
+              <div style={{ fontWeight: 700, fontSize: '.88rem' }}>{cashier.name}</div>
+              <button className="btn btn-sm btn-secondary" style={{ marginTop: 6, width: '100%', fontSize: '.78rem' }}
+                onClick={logoutCashier}>
+                Log Out
+              </button>
+            </div>
+          )}
           <button className="sidebar-item sidebar-cart-btn" onClick={() => setCartOpen(true)}>
             <span className="sidebar-item-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -229,8 +244,22 @@ export default function Sidebar() {
               </svg>
             </span>
             <span className="sidebar-item-label">Cart</span>
-            {cartItems > 0 && <span className="sidebar-badge">{cartItems}</span>}
+            {mounted && cartItems > 0 && <span className="sidebar-badge">{cartItems}</span>}
           </button>
+
+          {/* Global log out — only when a real user (not a cashier) is signed in */}
+          {user && (
+            <button className="sidebar-item" onClick={handleLogout}>
+              <span className="sidebar-item-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                  <polyline points="16 17 21 12 16 7"/>
+                  <line x1="21" y1="12" x2="9" y2="12"/>
+                </svg>
+              </span>
+              <span className="sidebar-item-label">Log out</span>
+            </button>
+          )}
         </div>
       </aside>
     </>

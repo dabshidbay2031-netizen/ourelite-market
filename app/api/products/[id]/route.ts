@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
+import { requireProductOwner } from '@/lib/apiAuth';
+import { isMissingColumnError } from '@/lib/apiHelpers';
 function mapProduct(p: Record<string, unknown>) {
   const id      = typeof p.id === 'number' ? p.id : parseInt(String(p.id), 10);
   const tags    = Array.isArray(p.tags) ? p.tags as string[] : [];
@@ -12,9 +14,9 @@ function mapProduct(p: Record<string, unknown>) {
     name:          p.name,
     price:         p.price,
     originalPrice: p.original_price,
+    cost:          Number(p.cost ?? 0),
     category:      p.category,
     subCategory:   subCat,
-    icon:          p.icon,
     stock:         p.stock,
     sku:           p.sku,
     supplierId:    p.supplier_id  ?? null,
@@ -30,11 +32,12 @@ function mapProduct(p: Record<string, unknown>) {
     priceTiers:    Array.isArray(p.price_tiers) ? p.price_tiers : [],
     isB2b:         Boolean(p.is_b2b ?? false),
     moq:           (p.moq as number) ?? 1,
+    taxMode:       (p.tax_mode as 'none' | 'included' | 'excluded') ?? 'none',
   };
 }
 
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  const id = parseInt(params.id, 10);
+export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const id = parseInt((await params).id, 10);
   try {
     const { data, error } = await getSupabaseAdmin()
       .from('products').select('*').eq('id', id).single();
@@ -45,16 +48,17 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   }
 }
 
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
-  const id   = parseInt(params.id, 10);
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const id = parseInt((await params).id, 10);
+  { const denied = await requireProductOwner(req, id); if (denied) return denied; }
   const body = await req.json();
 
   const updates: Record<string, unknown> = {};
   if (body.name          !== undefined) updates.name          = body.name;
   if (body.price         !== undefined) updates.price         = parseFloat(body.price);
   if (body.originalPrice !== undefined) updates.original_price= parseFloat(body.originalPrice);
+  if (body.cost          !== undefined) updates.cost          = parseFloat(body.cost) || 0;
   if (body.category      !== undefined) updates.category      = body.category;
-  if (body.icon          !== undefined) updates.icon          = body.icon;
   if (body.stock         !== undefined) updates.stock         = parseInt(body.stock, 10);
   if (body.sku           !== undefined) updates.sku           = body.sku;
   if (body.supplierId    !== undefined) updates.supplier_id   = body.supplierId
@@ -69,17 +73,40 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (body.priceTiers    !== undefined) updates.price_tiers   = Array.isArray(body.priceTiers) ? body.priceTiers : [];
   if (body.isB2b         !== undefined) updates.is_b2b        = Boolean(body.isB2b);
   if (body.moq           !== undefined) updates.moq           = parseInt(String(body.moq), 10);
+  if (body.taxMode       !== undefined) updates.tax_mode      = (['none','included','excluded'] as const).includes(body.taxMode) ? body.taxMode : 'none';
 
-  const { data, error } = await getSupabaseAdmin()
+  let { data, error } = await getSupabaseAdmin()
     .from('products').update(updates).eq('id', id).select().single();
+
+  // `cost` (migration_v3_3) may not exist on the live DB yet — drop it and
+  // retry so the rest of the edit still saves instead of 500ing outright.
+  if (error && isMissingColumnError(error) && 'cost' in updates) {
+    const { cost: _cost, ...rest } = updates;
+    ({ data, error } = await getSupabaseAdmin()
+      .from('products').update(rest).eq('id', id).select().single());
+  }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(mapProduct(data));
 }
 
-export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
-  const id = parseInt(params.id, 10);
-  const { error } = await getSupabaseAdmin().from('products').delete().eq('id', id);
+export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const id = parseInt((await params).id, 10);
+  { const denied = await requireProductOwner(req, id); if (denied) return denied; }
+  const sb = getSupabaseAdmin();
+
+  // Related rows in business_products / reviews / wishlists cascade away
+  // automatically. The one blocker is order_items, whose product FK is
+  // ON DELETE RESTRICT — so a product that has ever been sold can't be
+  // deleted. order_items is a normalized analytics table the app does NOT
+  // read (every screen uses orders.items JSONB, which stays intact), so we
+  // clear this product's lines and retry. The orders themselves are untouched.
+  let { error } = await sb.from('products').delete().eq('id', id);
+  if (error && /order_items/i.test(error.message)) {
+    await sb.from('order_items').delete().eq('product_id', id);
+    ({ error } = await sb.from('products').delete().eq('id', id));
+  }
+
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ success: true });
 }

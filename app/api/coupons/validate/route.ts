@@ -11,6 +11,13 @@ export async function POST(req: Request) {
   const { code, orderTotal } = await req.json();
   if (!code) return NextResponse.json({ valid: false, message: 'No code provided' });
 
+  // Reject missing/garbage totals — `undefined < minOrder` is false, which
+  // previously let invalid requests through and produced NaN discounts.
+  const total = Number(orderTotal);
+  if (!Number.isFinite(total) || total < 0) {
+    return NextResponse.json({ valid: false, message: 'Invalid order total' });
+  }
+
   try {
     const { data, error } = await getSupabaseAdmin()
       .from('coupons')
@@ -34,15 +41,15 @@ export async function POST(req: Request) {
     }
     // Check minimum order
     const minOrder = parseFloat(String(c.min_order ?? 0));
-    if (orderTotal < minOrder) {
+    if (total < minOrder) {
       return NextResponse.json({ valid: false, message: `Minimum order $${minOrder.toFixed(2)} required` });
     }
 
     // Calculate discount
     const value        = parseFloat(String(c.value));
     const discountAmount = c.type === 'percent'
-      ? Math.min((orderTotal * value) / 100, orderTotal)
-      : Math.min(value, orderTotal);
+      ? Math.min((total * value) / 100, total)
+      : Math.min(value, total);
 
     return NextResponse.json({
       valid: true,

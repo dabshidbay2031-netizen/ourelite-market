@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
-import { errMsg, isUUIDError } from '@/lib/apiHelpers';
+import { errMsg, isUUIDError, isMissingColumnError } from '@/lib/apiHelpers';
 
 function mapProfile(p: Record<string, unknown>) {
   return {
@@ -8,6 +8,8 @@ function mapProfile(p: Record<string, unknown>) {
     fullName:  p.full_name  ?? '',
     phone:     p.phone      ?? '',
     avatar:    p.avatar     ?? '👤',
+    avatarUrl: p.avatar_url ?? null,
+    bio:       p.bio        ?? '',
     verified:  p.verified   ?? false,
     createdAt: p.created_at ?? '',
   };
@@ -30,21 +32,35 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   const body = await req.json();
-  const { id, fullName, phone, avatar } = body;
+  const { id, fullName, phone, avatar, avatarUrl, bio } = body;
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
 
-  const payload = {
+  const payload: Record<string, unknown> = {
     id,
-    full_name: fullName ?? '',
-    phone:     phone    ?? '',
-    avatar:    avatar   ?? '👤',
+    full_name:  fullName  ?? '',
+    phone:      phone     ?? '',
+    avatar:     avatar    ?? '👤',
+    avatar_url: avatarUrl ?? null,
+    bio:        bio       ?? '',
   };
 
-  const { data, error } = await getSupabaseAdmin()
+  let { data, error } = await getSupabaseAdmin()
     .from('profiles')
     .upsert(payload)
     .select()
     .single();
+
+  // Pre-v3.1 DB without avatar_url/bio columns — retry without them so the
+  // app still works against an un-migrated schema.
+  if (error && isMissingColumnError(error)) {
+    delete payload.avatar_url;
+    delete payload.bio;
+    ({ data, error } = await getSupabaseAdmin()
+      .from('profiles')
+      .upsert(payload)
+      .select()
+      .single());
+  }
 
   if (error) {
     // UUID type error = schema not migrated yet — return a helpful message

@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
-import { errMsg } from '@/lib/apiHelpers';
+import { errMsg, jsonWithEtag } from '@/lib/apiHelpers';
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const { data, error } = await getSupabaseAdmin()
       .from('notifications')
@@ -21,7 +21,7 @@ export async function GET() {
       icon: n.icon,
     }));
 
-    return NextResponse.json(mapped);
+    return jsonWithEtag(req, mapped);
   } catch {
     return NextResponse.json([]);
   }

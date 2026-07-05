@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
+import { requireStaff } from '@/lib/apiAuth';
 import { errMsg } from '@/lib/apiHelpers';
 
 function map(c: Record<string, unknown>) {
@@ -28,6 +29,7 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  { const denied = await requireStaff(req); if (denied) return denied; }
   const body = await req.json();
   const { name, phone, email, address, notes } = body;
   if (!name?.trim()) {

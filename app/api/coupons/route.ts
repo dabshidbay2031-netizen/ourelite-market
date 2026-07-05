@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
+import { requireStaff } from '@/lib/apiAuth';
 import { errMsg, isMissingTableError } from '@/lib/apiHelpers';
 
 function mapCoupon(c: Record<string, unknown>) {
@@ -37,6 +38,7 @@ export async function GET(req: Request) {
 
 /** POST /api/coupons — create a coupon */
 export async function POST(req: Request) {
+  { const denied = await requireStaff(req); if (denied) return denied; }
   const body = await req.json();
   const { code, type = 'percent', value, minOrder = 0, maxUses, expiresAt, supplierId } = body;
   if (!code || !value) return NextResponse.json({ error: 'code and value required' }, { status: 400 });

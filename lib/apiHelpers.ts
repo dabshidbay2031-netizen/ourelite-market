@@ -1,3 +1,27 @@
+import { NextResponse } from 'next/server';
+import { createHash } from 'crypto';
+
+/**
+ * JSON response with an ETag so pollers can skip re-downloading unchanged
+ * payloads. When the client's If-None-Match matches, replies 304 with an
+ * empty body — the product catalog is ~500 KB, so live polling (every 15 s
+ * in AppContext) would otherwise re-transfer it each tick.
+ */
+export function jsonWithEtag(
+  req: Request,
+  data: unknown,
+  headers: Record<string, string> = {},
+): NextResponse {
+  const body = JSON.stringify(data);
+  const etag = `"${createHash('sha1').update(body).digest('base64url')}"`;
+  if (req.headers.get('if-none-match') === etag) {
+    return new NextResponse(null, { status: 304, headers: { ETag: etag, ...headers } });
+  }
+  return new NextResponse(body, {
+    headers: { 'Content-Type': 'application/json', ETag: etag, ...headers },
+  });
+}
+
 /**
  * Extracts a readable string from any Supabase / unknown error.
  * Supabase returns a PostgrestError object — not a native JS Error —
@@ -11,6 +35,24 @@ export function errMsg(e: unknown): string {
   if (typeof obj.message === 'string') return obj.message;
   if (typeof obj.details === 'string') return obj.details;
   return JSON.stringify(e);
+}
+
+/**
+ * Central server-side error log. Swap the body for Sentry et al. when a DSN is
+ * configured — call sites stay unchanged.
+ */
+export function logError(scope: string, e: unknown): void {
+  console.error(`[${scope}]`, errMsg(e));
+}
+
+/**
+ * Message safe to send to the client. In production it returns a generic
+ * fallback (so raw DB/internal strings never leak); in dev it returns the real
+ * message for debugging. Always log the real error server-side via logError.
+ */
+export function clientError(scope: string, e: unknown, fallback = 'Something went wrong'): string {
+  logError(scope, e);
+  return process.env.NODE_ENV === 'production' ? fallback : errMsg(e);
 }
 
 /** Returns true if the Supabase/PostgREST error is a missing-column error */

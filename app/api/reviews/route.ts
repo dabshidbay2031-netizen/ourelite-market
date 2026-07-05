@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { errMsg, isMissingTableError } from '@/lib/apiHelpers';
+import { requireUser } from '@/lib/apiAuth';
 
 function mapReview(r: Record<string, unknown>) {
   return {
@@ -37,10 +38,14 @@ export async function GET(req: Request) {
 
 /** POST /api/reviews */
 export async function POST(req: Request) {
+  const auth = await requireUser(req);
+  if (auth instanceof Response) return auth;
+
   const body = await req.json();
-  const { productId, userId, rating, comment, userName, userAvatar } = body;
-  if (!productId || !userId || !rating) {
-    return NextResponse.json({ error: 'productId, userId, rating required' }, { status: 400 });
+  const { productId, rating, comment, userName, userAvatar } = body;
+  const userId = auth; // authoritative: reviewer is the authenticated caller (no impersonation)
+  if (!productId || !rating) {
+    return NextResponse.json({ error: 'productId and rating required' }, { status: 400 });
   }
   if (rating < 1 || rating > 5) {
     return NextResponse.json({ error: 'rating must be 1–5' }, { status: 400 });

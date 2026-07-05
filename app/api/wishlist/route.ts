@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { errMsg, isMissingTableError } from '@/lib/apiHelpers';
+import { requireUser } from '@/lib/apiAuth';
 
 /** GET /api/wishlist?userId=X — returns array of product IDs */
 export async function GET(req: Request) {
@@ -23,8 +24,11 @@ export async function GET(req: Request) {
 
 /** POST /api/wishlist — add product to wishlist */
 export async function POST(req: Request) {
-  const { userId, productId } = await req.json();
-  if (!userId || !productId) return NextResponse.json({ error: 'userId, productId required' }, { status: 400 });
+  const auth = await requireUser(req);
+  if (auth instanceof Response) return auth;
+  const { productId } = await req.json();
+  const userId = auth; // own wishlist only
+  if (!productId) return NextResponse.json({ error: 'productId required' }, { status: 400 });
 
   try {
     await getSupabaseAdmin()
@@ -40,10 +44,12 @@ export async function POST(req: Request) {
 
 /** DELETE /api/wishlist?userId=X&productId=Y */
 export async function DELETE(req: Request) {
+  const auth = await requireUser(req);
+  if (auth instanceof Response) return auth;
   const { searchParams } = new URL(req.url);
-  const userId    = searchParams.get('userId');
+  const userId    = auth; // own wishlist only
   const productId = searchParams.get('productId');
-  if (!userId || !productId) return NextResponse.json({ error: 'userId, productId required' }, { status: 400 });
+  if (!productId) return NextResponse.json({ error: 'productId required' }, { status: 400 });
 
   try {
     await getSupabaseAdmin()

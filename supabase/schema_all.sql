@@ -515,7 +515,7 @@ OVERRIDING SYSTEM VALUE VALUES
   (43,'Dove Shampoo Nourishing 1L',   12.99,  15.99,'cosmetics',  'haircare',  '🚿',312,'DOV-SHP',   6,4.6,1678,4321,'8710908157783','Dove',       ARRAY['Nourishing','Keratin','Sulfate-Free'],    'Nourishing shampoo with keratin and silk proteins, 1L.'),
   (44,'Nivea Men After Shave',        11.99,  14.99,'cosmetics',  'mens_groom','🪒',267,'NIV-ASH',   6,4.4,987, 2345,'4005808151387','Nivea',      ARRAY['Sensitive','No Alcohol','Moisturizing'],  'Sensitive after shave, alcohol-free, cools & moisturizes.'),
   (45,'OPI Nail Polish Set 12pc',     39.99,  49.99,'cosmetics',  'nail',      '💅', 78,'OPI-NPS',   6,4.7,567, 1234,'0619828095404','OPI',        ARRAY['Chip Resistant','Quick Dry','12 Colors'], '12-piece nail polish, chip resistant, quick-dry.'),
-  -- Construction
+  -- Construction  
   (46,'Makita 18V Drill Set',        189.99, 229.99,'construction','tools',    '🔧', 34,'MKT-DRL',   4,4.8,456,  234,'0088381623919','Makita',     ARRAY['18V','2 Batteries','Brushless'],          '18V LXT brushless drill set, 2 batteries and charger.'),
   (47,'Cement 50kg Portland',         14.99,  17.99,'construction','materials','🧱',234,'CMT-50K',   4,4.5,123,  890,'6131201234567','SABCO',      ARRAY['Portland','50kg','Grade 42.5'],           'Portland cement Grade 42.5, 50kg bag, high strength.'),
   (48,'Safety Helmet + Vest Kit',     29.99,  39.99,'construction','safety',   '🦺',145,'SAF-KIT',   4,4.7,234,  567,'6933456789012','Portwest',   ARRAY['EN397','Hi-Vis','Adjustable','PPE'],      'CE certified safety helmet and hi-vis vest.'),

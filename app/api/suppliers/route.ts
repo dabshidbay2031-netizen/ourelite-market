@@ -1,6 +1,26 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
-import { errMsg, isUUIDError } from '@/lib/apiHelpers';
+import { errMsg, isUUIDError, isMissingColumnError, jsonWithEtag } from '@/lib/apiHelpers';
+import { slugify, isValidSlug } from '@/lib/slug';
+
+/**
+ * A unique, non-reserved slug derived from the store name — "TechZone!" →
+ * "techzone", or "techzone-2" if taken. Returns null when the name can't
+ * produce a valid slug (owner can still set one manually in Profile).
+ */
+async function generateUniqueSlug(name: string): Promise<string | null> {
+  const base = slugify(name);
+  if (!base || !isValidSlug(base)) return null;
+  const { data } = await getSupabaseAdmin()
+    .from('suppliers').select('slug').like('slug', `${base}%`);
+  const taken = new Set((data ?? []).map(r => r.slug as string));
+  if (!taken.has(base)) return base;
+  for (let i = 2; i < 100; i++) {
+    const candidate = `${base.slice(0, 30 - String(i).length - 1)}-${i}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return null;
+}
 
 function mapSupplier(s: Record<string, unknown>) {
   return {
@@ -21,13 +41,32 @@ function mapSupplier(s: Record<string, unknown>) {
     bio:            s.bio          ?? '',
     contactNumbers: (s.contact_numbers as string[]) ?? [],
     authUserId:     s.auth_user_id  ?? null,
+    slug:           (s.slug as string | null | undefined) ?? null,
+    latitude:       (s.latitude  as number | null | undefined) ?? null,
+    longitude:      (s.longitude as number | null | undefined) ?? null,
     accountType:    (s.account_type as string) ?? 'business',
+    /* Trial/approval — absent columns (pre-migration schema) map to null */
+    approvalStatus:      (s.approval_status as string | undefined) ?? null,
+    trialStartedAt:      (s.trial_started_at as string | undefined) ?? null,
+    approvalRequestedAt: (s.approval_requested_at as string | undefined) ?? null,
   };
 }
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const authUserId = searchParams.get('authUserId');
+  const slug       = searchParams.get('slug');
+
+  // ── Storefront slug lookup (used by the #/:slug hash route) ──
+  if (slug) {
+    try {
+      const { data } = await getSupabaseAdmin()
+        .from('suppliers').select('*')
+        .eq('slug', slug.toLowerCase()).maybeSingle();
+      if (data) return NextResponse.json(mapSupplier(data as Record<string, unknown>));
+    } catch { /* table may not have a slug column yet */ }
+    return NextResponse.json(null, { status: 404 });
+  }
 
   try {
     let query = getSupabaseAdmin().from('suppliers').select('*');
@@ -39,7 +78,7 @@ export async function GET(req: Request) {
     const headers = authUserId
       ? { 'Cache-Control': 'private, no-store' }
       : { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600' };
-    return NextResponse.json(data.map(mapSupplier), { headers });
+    return jsonWithEtag(req, data.map(mapSupplier), headers);
   } catch {
     return NextResponse.json([]);
   }
@@ -77,8 +116,11 @@ export async function POST(req: Request) {
     badge:         badge?.trim()      ?? 'New',
     bio:           '',
     contact_numbers: [],
-    account_type:  (accountType === 'supplier' || accountType === 'business') ? accountType : 'business',
+    account_type:  (accountType === 'supplier' || accountType === 'business' || accountType === 'agent') ? accountType : 'business',
   };
+
+  // Every new store gets a clean shareable link (<domain>/<slug>) from day one
+  const autoSlug = await generateUniqueSlug(String(name));
 
   // Compute next safe ID to work around a potentially broken SERIAL sequence
   const { data: maxRow } = await getSupabaseAdmin()
@@ -88,10 +130,17 @@ export async function POST(req: Request) {
   // Phase 1: full insert with auth_user_id and explicit id
   try {
     const newSupplier: Record<string, unknown> = { ...baseFields, id: nextId };
+    if (autoSlug)   newSupplier.slug = autoSlug;
     if (authUserId) newSupplier.auth_user_id = authUserId;
 
-    const { data, error } = await getSupabaseAdmin()
+    let { data, error } = await getSupabaseAdmin()
       .from('suppliers').insert(newSupplier).select().single();
+    // Pre-migration schema without a slug column — retry without it
+    if (error && autoSlug && isMissingColumnError(error)) {
+      delete newSupplier.slug;
+      ({ data, error } = await getSupabaseAdmin()
+        .from('suppliers').insert(newSupplier).select().single());
+    }
     if (error) throw error;
     return NextResponse.json(mapSupplier(data as Record<string, unknown>), { status: 201 });
   } catch (e1) {

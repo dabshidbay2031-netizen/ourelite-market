@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
+import { sumRevenue } from '@/lib/revenue';
+import { requireAdmin } from '@/lib/apiAuth';
 
 function mapOrder(o: Record<string, unknown>) {
   return {
@@ -29,9 +31,9 @@ async function getCount(table: string, filter?: { col: string; val: string }): P
 
 async function getRevenue(): Promise<number> {
   try {
-    const { data } = await sb().from('orders').select('total');
-    return ((data ?? []) as Record<string, unknown>[])
-      .reduce((sum, o) => sum + (Number(o.total) || 0), 0);
+    // status included so deleted/cancelled/refunded money never counts
+    const { data } = await sb().from('orders').select('total, status');
+    return sumRevenue((data ?? []) as { total: number; status: string }[]);
   } catch { return 0; }
 }
 
@@ -43,7 +45,10 @@ async function getRecentOrders(): Promise<ReturnType<typeof mapOrder>[]> {
   } catch { return []; }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
+
   const [
     totalBusinesses,
     totalSuppliers,

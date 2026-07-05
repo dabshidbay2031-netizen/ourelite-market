@@ -21,3 +21,8 @@ npm-debug.log*
 *.tsbuildinfo
 graphify-out/
 generate-test-doc.js
+
+# Local-only files (never commit)
+seed-credentials.txt
+.dev-server.log
+~$*

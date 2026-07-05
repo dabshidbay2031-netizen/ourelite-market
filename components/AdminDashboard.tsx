@@ -4,7 +4,9 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useApp }  from '@/context/AppContext';
 import type { Supplier, Product, Order } from '@/lib/types';
-import Link from 'next/link';
+import { Link } from '@/lib/hashRouter';
+import { authHeaders } from '@/lib/clientAuth';
+import ProductImage from '@/components/ProductImage';
 
 /* ── Types ──────────────────────────────────────────────────────────── */
 type AdminRole = 'admin' | 'semi_admin' | null;
@@ -101,7 +103,7 @@ export default function AdminDashboard() {
     setLoading(true);
     try {
       if (t === 'overview') {
-        const r = await fetch('/api/admin/stats'); setStats(await r.json());
+        const r = await fetch('/api/admin/stats', { headers: await authHeaders() }); setStats(await r.json());
       } else if (t === 'businesses') {
         const r = await fetch('/api/suppliers');   setBusinesses(await r.json());
       } else if (t === 'products') {
@@ -109,9 +111,9 @@ export default function AdminDashboard() {
       } else if (t === 'orders') {
         const r = await fetch('/api/orders');      setOrders(await r.json());
       } else if (t === 'users') {
-        const r = await fetch('/api/admin/users'); setUsers(await r.json());
+        const r = await fetch('/api/admin/users', { headers: await authHeaders() }); setUsers(await r.json());
       } else if (t === 'team') {
-        const r = await fetch('/api/admin/admins'); setAdmins(await r.json());
+        const r = await fetch('/api/admin/admins', { headers: await authHeaders() }); setAdmins(await r.json());
       }
     } catch { /* ignore */ }
     setLoading(false);
@@ -158,7 +160,7 @@ export default function AdminDashboard() {
   const saveBiz = async () => {
     if (!editBiz) return;
     const res = await fetch(`/api/suppliers/${editBiz.id}`, {
-      method:'PATCH', headers:{'Content-Type':'application/json'},
+      method:'PATCH', headers: await authHeaders({ 'Content-Type':'application/json' }),
       body: JSON.stringify({
         name: editBiz.name, bio: editBiz.bio ?? '', location: editBiz.location,
         verified: editBiz.verified, accountType: editBiz.accountType,
@@ -170,18 +172,35 @@ export default function AdminDashboard() {
 
   const deleteBiz = async (id: number, name: string) => {
     if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
-    const res = await fetch(`/api/suppliers/${id}`, { method:'DELETE' });
+    const res = await fetch(`/api/suppliers/${id}`, { method:'DELETE', headers: await authHeaders() });
     if (res.ok) { toast('Deleted', 'default'); load('businesses'); }
     else        { toast('Delete failed', 'error'); }
   };
 
   const toggleVerify = async (b: Supplier) => {
     const res = await fetch(`/api/suppliers/${b.id}`, {
-      method:'PATCH', headers:{'Content-Type':'application/json'},
+      method:'PATCH', headers: await authHeaders({ 'Content-Type':'application/json' }),
       body: JSON.stringify({ verified: !b.verified }),
     });
     if (res.ok) { toast(b.verified ? 'Unverified' : 'Verified ✓', 'success'); load('businesses'); }
     else        { toast('Failed', 'error'); }
+  };
+
+  /* ── Trial approval decision ───────────────────────────────────── */
+  const setApproval = async (b: Supplier, approvalStatus: 'approved' | 'rejected') => {
+    const res = await fetch(`/api/suppliers/${b.id}`, {
+      method:'PATCH', headers: await authHeaders({ 'Content-Type':'application/json' }),
+      body: JSON.stringify({ approvalStatus }),
+    });
+    if (res.ok) { toast(approvalStatus === 'approved' ? 'Account approved ✓' : 'Request rejected', 'success'); load('businesses'); }
+    else        { toast('Failed', 'error'); }
+  };
+
+  const APPROVAL_BADGE: Record<string, { label: string; color: string }> = {
+    approved: { label: '✅ Approved',     color: '#10B981' },
+    pending:  { label: '🕐 Wants approval', color: '#F59E0B' },
+    trial:    { label: '⏳ On trial',      color: '#6366F1' },
+    rejected: { label: '🚫 Rejected',     color: '#EF4444' },
   };
 
   /* ── Product edit ──────────────────────────────────────────────── */
@@ -191,7 +210,7 @@ export default function AdminDashboard() {
       method:'PATCH', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         name: editProd.name, price: editProd.price, originalPrice: editProd.originalPrice,
-        category: editProd.category, icon: editProd.icon, stock: editProd.stock,
+        category: editProd.category, stock: editProd.stock,
         description: editProd.description, moq: (editProd as Product & { moq?: number }).moq ?? 1,
       }),
     });
@@ -211,7 +230,7 @@ export default function AdminDashboard() {
     if (!newAdminUid.trim()) { toast('Enter a user UID', 'error'); return; }
     setSavingAdmin(true);
     const res = await fetch('/api/admin/admins', {
-      method:'POST', headers:{'Content-Type':'application/json'},
+      method:'POST', headers: await authHeaders({ 'Content-Type':'application/json' }),
       body: JSON.stringify({ userId: newAdminUid.trim(), role: newAdminRole, name: newAdminName.trim(), email: newAdminEmail.trim() }),
     });
     setSavingAdmin(false);
@@ -227,7 +246,7 @@ export default function AdminDashboard() {
 
   const changeRole = async (a: AdminEntry, newRole: 'admin' | 'semi_admin') => {
     const res = await fetch(`/api/admin/admins/${a.id}`, {
-      method:'PATCH', headers:{'Content-Type':'application/json'},
+      method:'PATCH', headers: await authHeaders({ 'Content-Type':'application/json' }),
       body: JSON.stringify({ role: newRole }),
     });
     if (res.ok) { toast('Role updated ✓', 'success'); load('team'); }
@@ -237,7 +256,7 @@ export default function AdminDashboard() {
   const removeAdmin = async (a: AdminEntry) => {
     if (a.userId === user.id) { toast("You can't remove yourself", 'error'); return; }
     if (!confirm(`Remove "${a.name || a.userId}" from admin team?`)) return;
-    const res = await fetch(`/api/admin/admins/${a.id}`, { method:'DELETE' });
+    const res = await fetch(`/api/admin/admins/${a.id}`, { method:'DELETE', headers: await authHeaders() });
     if (res.ok) { toast('Removed', 'default'); load('team'); }
     else        { toast('Failed', 'error'); }
   };
@@ -398,10 +417,21 @@ export default function AdminDashboard() {
                               {b.verified
                                 ? <span style={{ color:'#10B981', fontWeight:600, fontSize:'.8rem' }}>✅ Verified</span>
                                 : <span style={{ color:'#F59E0B', fontWeight:600, fontSize:'.8rem' }}>⏳ Pending</span>}
+                              {b.approvalStatus && (
+                                <div style={{ color: APPROVAL_BADGE[b.approvalStatus]?.color, fontWeight:600, fontSize:'.74rem', marginTop:3 }}>
+                                  {APPROVAL_BADGE[b.approvalStatus]?.label}
+                                </div>
+                              )}
                             </td>
                             {isAdmin && (
                               <td style={td}>
                                 <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                                  {b.approvalStatus && b.approvalStatus !== 'approved' && (
+                                    <button className="btn btn-primary btn-sm" onClick={() => setApproval(b, 'approved')}>✔ Approve</button>
+                                  )}
+                                  {b.approvalStatus === 'pending' && (
+                                    <button className="btn btn-ghost btn-sm" style={{ color:'var(--danger)' }} onClick={() => setApproval(b, 'rejected')}>✖ Reject</button>
+                                  )}
                                   <button className="btn btn-secondary btn-sm" onClick={() => setEditBiz({ ...b })}>✏️ Edit</button>
                                   <button className="btn btn-secondary btn-sm" onClick={() => toggleVerify(b)}>
                                     {b.verified ? '⏸ Unverify' : '✅ Verify'}
@@ -465,16 +495,12 @@ export default function AdminDashboard() {
                       <tbody>
                         {products.slice(0,200).map(p => {
                           const sup = businesses.find(b => b.id === p.supplierId);
-                          const img = (p.imageUrls?.[0] ?? p.imageUrl) || null;
                           return (
                             <tr key={p.id}>
                               <td style={td}>
                                 <div style={{ display:'flex', alignItems:'center', gap:8 }}>
                                   <div style={{ width:36, height:36, borderRadius:8, background:'var(--border-light,#f1f5f9)', display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden', flexShrink:0 }}>
-                                    {img
-                                      // eslint-disable-next-line @next/next/no-img-element
-                                      ? <img src={img} alt={p.name} style={{ width:'100%', height:'100%', objectFit:'cover' }} />
-                                      : <span style={{ fontSize:18 }}>{p.icon}</span>}
+                                    <ProductImage imageUrl={p.imageUrl} imageUrls={p.imageUrls} name={p.name} />
                                   </div>
                                   <div>
                                     <div style={{ fontWeight:600, fontSize:'.85rem' }}>{p.name}</div>
@@ -561,7 +587,7 @@ export default function AdminDashboard() {
                                       const p = products.find(x => x.id === item.id);
                                       return (
                                         <div key={i} style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:'6px 12px', fontSize:'.8rem' }}>
-                                          {p ? `${p.icon} ${p.name}` : `Product #${item.id}`}
+                                          {p ? p.name : `Product #${item.id}`}
                                           {' '}<strong>× {item.qty}</strong>
                                           {p && <span style={{ color:'var(--text-muted)', marginLeft:6 }}>{fmtAmt(p.price * item.qty)}</span>}
                                         </div>
@@ -808,7 +834,7 @@ export default function AdminDashboard() {
               </div>
               <div className="form-group">
                 <label className="form-label">User UID *</label>
-                <input className="form-input" placeholder="Firebase or Supabase UID" value={newAdminUid} onChange={e => setNewAdminUid(e.target.value)} />
+                <input className="form-input" placeholder="Supabase UID" value={newAdminUid} onChange={e => setNewAdminUid(e.target.value)} />
               </div>
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
                 <div className="form-group">

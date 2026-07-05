@@ -1,7 +1,7 @@
 import { getSupabaseAdmin } from '@/lib/supabase';
 import type { ChatUser } from '@/lib/types';
 
-/** Resolve a Firebase/Supabase UID to a ChatUser shape.
+/** Resolve a Supabase auth UID to a ChatUser shape.
  *  Checks suppliers table first (business accounts), then profiles (customers). */
 export async function resolveChatUser(uid: string): Promise<ChatUser> {
   // Business account?

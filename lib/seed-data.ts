@@ -3,7 +3,9 @@
 // Keeping it here prevents the large product catalog from entering the client bundle.
 import type { Product, Supplier, Order, Notification } from './types';
 
-export const PRODUCTS: Product[] = [
+// icon field removed from schema; seed data keeps it for legacy compatibility
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const PRODUCTS = ([
   { id:1,  name:'iPhone 15 Pro',              price:999.99,  originalPrice:1099.99, category:'electronics', subCategory:'phones',    icon:'📱', stock:23,  sku:'APL-15P',   supplierId:1, rating:4.8, reviews:324,  sold:156,  barcode:'0194253716907', brand:'Apple',        tags:['5G','USB-C','48MP','ProMotion'],           description:'Titanium design, A17 Pro chip, 48MP camera, USB-C.' },
   { id:2,  name:'Samsung Galaxy S24',         price:849.99,  originalPrice:899.99,  category:'electronics', subCategory:'phones',    icon:'📲', stock:15,  sku:'SAM-S24',   supplierId:1, rating:4.6, reviews:287,  sold:203,  barcode:'8806095071467', brand:'Samsung',      tags:['5G','AI Camera','120Hz'],                 description:'Galaxy AI phone, 6.2" display, 50MP camera, Snapdragon 8 Gen 3.' },
   { id:3,  name:'MacBook Air M3',             price:1299.99, originalPrice:1399.99, category:'electronics', subCategory:'laptops',   icon:'💻', stock:8,   sku:'APL-MBAM3', supplierId:1, rating:4.9, reviews:156,  sold:89,   barcode:'0194253913105', brand:'Apple',        tags:['M3 Chip','15h Battery','Retina'],         description:'Ultra-thin laptop, M3 chip, 15-hour battery, Liquid Retina.' },
@@ -69,7 +71,7 @@ export const PRODUCTS: Product[] = [
   { id:63, name:'Somali Language Textbook',   price:24.99,   originalPrice:34.99,   category:'books',       subCategory:'education',  icon:'📖', stock:78,  sku:'BK-SMTX',   supplierId:5, rating:4.7, reviews:234,  sold:567,  barcode:'9789990000123', brand:'Dawan Press',  tags:['Somali','A1-B2','Audio CD'],              description:'Somali language course A1-B2 with exercises.' },
   { id:64, name:"Children's Story Bundle",    price:34.99,   originalPrice:44.99,   category:'books',       subCategory:'childrens',  icon:'🧸', stock:167, sku:'BK-KID5',   supplierId:5, rating:4.8, reviews:678,  sold:1234, barcode:'9780241456781', brand:'Penguin',      tags:['Ages 3-8','Illustrated','5 Books'],       description:'5-book illustrated bundle for ages 3-8.' },
   { id:65, name:'Python Programming Crash',   price:39.99,   originalPrice:49.99,   category:'books',       subCategory:'education',  icon:'💻', stock:89,  sku:'BK-PY3',    supplierId:5, rating:4.7, reviews:1234, sold:2345, barcode:'9781718502703', brand:'No Starch Press',tags:['Python 3','Beginner','Projects'],          description:'Fast-paced Python 3 introduction with projects.' },
-] as Product[];
+] as unknown[]) as Product[];
 
 export const SUPPLIERS: Supplier[] = [
   { id:1, name:'TechVault Global',          rating:4.8, reviews:234, location:'Shenzhen, China',        minOrder:10,  categories:['electronics'],                          icon:'🏭', description:'Premium electronics supplier, 15+ years.',    productIds:[1,2,3,4,5,6,7,8,9,10],                              discount:15, deliveryDays:'7-14',  verified:true,  badge:'Top Rated'   },

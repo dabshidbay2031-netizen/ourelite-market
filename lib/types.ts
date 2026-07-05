@@ -22,9 +22,9 @@ export interface Product {
   name:          string;
   price:         number;
   originalPrice: number;
+  cost?:         number; // what it costs to acquire/produce — drives profit on the dashboard
   category:      string;
   subCategory?:  string;
-  icon:          string;
   stock:         number;
   sku:           string;
   supplierId:    number | null;
@@ -40,6 +40,7 @@ export interface Product {
   priceTiers?:   PriceTier[];   // wholesale tier pricing
   isB2b?:        boolean;       // only visible to business/supplier accounts
   moq?:          number;        // minimum order quantity
+  taxMode?:      'none' | 'included' | 'excluded'; // VAT handling (5%)
 }
 
 /** A product that a specific business has claimed from the global catalog */
@@ -73,8 +74,15 @@ export interface Supplier {
   bio?:           string;
   contactNumbers?:string[];
   authUserId?:    string;
+  slug?:          string | null;  // storefront URL slug (#/:slug)
+  latitude?:      number | null;  // store GPS location (for map + directions)
+  longitude?:     number | null;
   hideStock?:     boolean;  // hide stock count from public customers
   accountType?:   'business' | 'supplier';
+  /* Trial + approval lifecycle (absent on pre-migration schemas = approved) */
+  approvalStatus?:      'trial' | 'pending' | 'approved' | 'rejected' | null;
+  trialStartedAt?:      string | null;
+  approvalRequestedAt?: string | null;
 }
 
 export interface CartItem {
@@ -116,13 +124,40 @@ export interface UserProfile {
   fullName:  string;
   phone:     string;
   avatar:    string;
+  avatarUrl: string | null;
+  bio:       string;
   verified:  boolean;
   createdAt: string;
 }
 
-export type AccountType   = 'user' | 'business' | 'supplier';
-export type PaymentMethod = 'waafi' | 'cash' | 'card';
+export type AccountType   = 'user' | 'business' | 'supplier' | 'agent';
+export type PaymentMethod = 'waafi' | 'cash' | 'card' | 'sifalo';
+
+/** Sifalo Pay sub-gateways (which wallet the customer pays from). */
+export type SifaloGateway = 'waafi' | 'edahab' | 'pbwallet';
 export type PaymentState  = 'idle'  | 'pending' | 'success' | 'error';
+
+export interface PaymentSplit {
+  method: PaymentMethod;
+  amount: string;
+}
+
+export interface PosSession {
+  id:             string;
+  openedBy:       string;
+  cashierName:    string;
+  openedAt:       string;
+  closedAt:       string | null;
+  openingFloat:   number;
+  closingCounted: number | null;
+  expectedCash:   number | null;
+  discrepancy:    number | null;
+  status:         'open' | 'closed';
+  notes:          string | null;
+  totalOrders?:   number;
+  totalRevenue?:  number;
+  cashRevenue?:   number;
+}
 
 /** Minimal user info carried inside chat responses */
 export interface ChatUser {

@@ -1,6 +1,25 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { errMsg, isMissingTableError } from '@/lib/apiHelpers';
+import { getAuthUser } from '@/lib/apiAuth';
+
+/**
+ * Authorize the caller as a participant of the conversation.
+ * Returns the authenticated user id on success, or a Response to send back.
+ * (Messages are private — only the two people in the thread may read/write.)
+ */
+async function requireParticipant(req: Request, convId: string): Promise<string | Response> {
+  const user = await getAuthUser(req);
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const { data } = await getSupabaseAdmin()
+    .from('conversations').select('user_id_1, user_id_2').eq('id', convId).maybeSingle();
+  if (!data) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+  const members = [String(data.user_id_1), String(data.user_id_2)];
+  if (!members.includes(user.id)) {
+    return NextResponse.json({ error: 'Forbidden — not a participant' }, { status: 403 });
+  }
+  return user.id;
+}
 
 function mapMsg(m: Record<string, unknown>) {
   return {
@@ -21,8 +40,12 @@ function mapMsg(m: Record<string, unknown>) {
  */
 export async function GET(
   req: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const convId = (await params).id;
+  const auth = await requireParticipant(req, convId);
+  if (auth instanceof Response) return auth;
+
   const { searchParams } = new URL(req.url);
   const before = searchParams.get('before');
   const limit  = Math.min(parseInt(searchParams.get('limit') ?? '50', 10), 100);
@@ -31,7 +54,7 @@ export async function GET(
     let query = getSupabaseAdmin()
       .from('messages')
       .select('*')
-      .eq('conversation_id', params.id)
+      .eq('conversation_id', convId)
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -55,14 +78,16 @@ export async function GET(
  */
 export async function POST(
   req: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const body = await req.json();
-  const { senderId, content, imageUrl, messageType = 'text' } = body;
+  const convId = (await params).id;
+  const auth = await requireParticipant(req, convId);
+  if (auth instanceof Response) return auth;
+  const senderId = auth; // authoritative: the sender IS the authenticated caller
 
-  if (!senderId) {
-    return NextResponse.json({ error: 'senderId required' }, { status: 400 });
-  }
+  const body = await req.json();
+  const { content, imageUrl, messageType = 'text' } = body;
+
   if (!content && !imageUrl) {
     return NextResponse.json({ error: 'content or imageUrl required' }, { status: 400 });
   }
@@ -71,7 +96,7 @@ export async function POST(
     const { data, error } = await getSupabaseAdmin()
       .from('messages')
       .insert({
-        conversation_id: params.id,
+        conversation_id: convId,
         sender_id:       senderId,
         content:         content    ?? null,
         image_url:       imageUrl   ?? null,
@@ -86,7 +111,7 @@ export async function POST(
     await getSupabaseAdmin()
       .from('conversations')
       .update({ updated_at: new Date().toISOString() })
-      .eq('id', params.id);
+      .eq('id', convId);
 
     return NextResponse.json(mapMsg(data as Record<string, unknown>), { status: 201 });
   } catch (e) {
@@ -107,16 +132,18 @@ export async function POST(
  */
 export async function PATCH(
   req: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const { readerId } = await req.json();
-  if (!readerId) return NextResponse.json({ error: 'readerId required' }, { status: 400 });
+  const convId = (await params).id;
+  const auth = await requireParticipant(req, convId);
+  if (auth instanceof Response) return auth;
+  const readerId = auth; // the reader IS the authenticated caller
 
   try {
     await getSupabaseAdmin()
       .from('messages')
       .update({ read_at: new Date().toISOString() })
-      .eq('conversation_id', params.id)
+      .eq('conversation_id', convId)
       .neq('sender_id', readerId)
       .is('read_at', null);
 

@@ -1,27 +1,29 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { errMsg } from '@/lib/apiHelpers';
+import { getAuthUser } from '@/lib/apiAuth';
 
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
-  const id   = parseInt(params.id, 10);
+/** Confirm the address row belongs to the caller. Returns a Response on failure. */
+async function requireOwnAddress(req: Request, id: number): Promise<Response | null> {
+  const user = await getAuthUser(req);
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const { data } = await getSupabaseAdmin()
+    .from('addresses').select('user_id').eq('id', id).maybeSingle();
+  if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  if (String(data.user_id) !== user.id) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  return null;
+}
+
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const id = parseInt((await params).id, 10);
+  { const denied = await requireOwnAddress(req, id); if (denied) return denied; }
   const body = await req.json();
 
-  // If setting as default, clear others for this user first
-  if (body.isDefault && body.userId) {
-    await getSupabaseAdmin()
-      .from('addresses')
-      .update({ is_default: false })
-      .eq('user_id', body.userId);
-  }
-
   const updates: Record<string, unknown> = {};
-  if (body.label     !== undefined) updates.label      = body.label;
-  if (body.fullName  !== undefined) updates.full_name  = body.fullName;
-  if (body.street    !== undefined) updates.street     = body.street;
-  if (body.city      !== undefined) updates.city       = body.city;
-  if (body.country   !== undefined) updates.country    = body.country;
-  if (body.phone     !== undefined) updates.phone      = body.phone;
-  if (body.isDefault !== undefined) updates.is_default = body.isDefault;
+  if (body.label     !== undefined) updates.label     = body.label;
+  if (body.latitude  !== undefined) updates.latitude  = parseFloat(body.latitude);
+  if (body.longitude !== undefined) updates.longitude = parseFloat(body.longitude);
+  if (body.notes     !== undefined) updates.notes     = body.notes;
 
   const { data, error } = await getSupabaseAdmin()
     .from('addresses').update(updates).eq('id', id).select().single();
@@ -29,9 +31,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   return NextResponse.json(data);
 }
 
-export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
-  const { error } = await getSupabaseAdmin()
-    .from('addresses').delete().eq('id', parseInt(params.id, 10));
+export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const id = parseInt((await params).id, 10);
+  { const denied = await requireOwnAddress(req, id); if (denied) return denied; }
+  const { error } = await getSupabaseAdmin().from('addresses').delete().eq('id', id);
   if (error) return NextResponse.json({ error: errMsg(error) }, { status: 500 });
   return NextResponse.json({ success: true });
 }

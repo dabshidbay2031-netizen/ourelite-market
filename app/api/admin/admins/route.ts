@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
+import { requireAdmin } from '@/lib/apiAuth';
+import { clientError } from '@/lib/apiHelpers';
 
 function mapAdmin(r: Record<string, unknown>) {
   return {
@@ -13,7 +15,10 @@ function mapAdmin(r: Record<string, unknown>) {
 }
 
 /** GET /api/admin/admins — list all admins & semi-admins */
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
+
   try {
     const { data, error } = await getSupabaseAdmin()
       .from('admins')
@@ -27,8 +32,11 @@ export async function GET() {
   }
 }
 
-/** POST /api/admin/admins — add a new admin or semi-admin */
+/** POST /api/admin/admins — add a new admin or semi-admin (full admins only) */
 export async function POST(req: Request) {
+  const denied = await requireAdmin(req, { role: 'admin' });
+  if (denied) return denied;
+
   const { userId, role, name, email } = await req.json();
   if (!userId || !role) {
     return NextResponse.json({ error: 'userId and role are required' }, { status: 400 });
@@ -47,6 +55,6 @@ export async function POST(req: Request) {
     if (error) throw error;
     return NextResponse.json(mapAdmin(data as Record<string, unknown>), { status: 201 });
   } catch (e: unknown) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json({ error: clientError('admin/admins POST', e, 'Could not add admin') }, { status: 500 });
   }
 }

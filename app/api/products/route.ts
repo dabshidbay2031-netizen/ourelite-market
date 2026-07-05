@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
-import { errMsg, isMissingColumnError, isForeignKeyError } from '@/lib/apiHelpers';
+import { requireStaff } from '@/lib/apiAuth';
+import { errMsg, isMissingColumnError, isForeignKeyError, jsonWithEtag } from '@/lib/apiHelpers';
 
 function mapProduct(p: Record<string, unknown>) {
   const id      = typeof p.id === 'number' ? p.id : parseInt(String(p.id), 10);
@@ -14,9 +15,9 @@ function mapProduct(p: Record<string, unknown>) {
     name:          p.name,
     price:         p.price,
     originalPrice: p.original_price,
+    cost:          Number(p.cost ?? 0),
     category:      p.category,
     subCategory:   subCat,
-    icon:          p.icon,
     stock:         p.stock,
     sku:           p.sku,
     supplierId:    p.supplier_id   ?? null,
@@ -32,6 +33,7 @@ function mapProduct(p: Record<string, unknown>) {
     priceTiers:    Array.isArray(p.price_tiers) ? p.price_tiers : [],
     isB2b:         Boolean(p.is_b2b ?? false),
     moq:           (p.moq as number) ?? 1,
+    taxMode:       (p.tax_mode as 'none' | 'included' | 'excluded') ?? 'none',
   };
 }
 
@@ -104,15 +106,16 @@ export async function GET(req: Request) {
   if (category) result = result.filter(p => p.category === category);
   if (q)        result = result.filter(p => matchesQuery(p, q));
 
-  return NextResponse.json(result, { headers: CACHE });
+  return jsonWithEtag(req, result, CACHE);
 }
 
 export async function POST(req: Request) {
+  { const denied = await requireStaff(req); if (denied) return denied; }
   const body = await req.json();
   const {
-    name, price, originalPrice, category, subCategory, icon, stock,
+    name, price, originalPrice, cost, category, subCategory, stock,
     sku, description, imageUrl, imageUrls, supplierId, barcode, tags, brand,
-    priceTiers, isB2b, moq,
+    priceTiers, isB2b, moq, taxMode,
   } = body;
 
   if (!name || !price || !category) {
@@ -123,9 +126,9 @@ export async function POST(req: Request) {
     name:           String(name).trim(),
     price:          parseFloat(price),
     original_price: parseFloat(originalPrice ?? price),
+    cost:           parseFloat(cost ?? '0') || 0,
     category,
     sub_category:   subCategory  ?? null,
-    icon:           icon         ?? '📦',
     stock:          parseInt(stock ?? '0', 10),
     sku:            sku?.trim()  ?? `SKU-${Date.now()}`,
     supplier_id:    supplierId   ? parseInt(String(supplierId), 10) : null,
@@ -139,12 +142,13 @@ export async function POST(req: Request) {
     price_tiers:    Array.isArray(priceTiers) ? priceTiers : [],
     is_b2b:         Boolean(isB2b ?? false),
     moq:            parseInt(moq ?? '1', 10),
+    tax_mode:       (['none','included','excluded'] as const).includes(taxMode) ? taxMode : 'none',
   };
 
   const basicProduct: Record<string, unknown> = {
     name: fullProduct.name, price: fullProduct.price,
     original_price: fullProduct.original_price, category: fullProduct.category,
-    icon: fullProduct.icon, stock: fullProduct.stock, sku: fullProduct.sku,
+    stock: fullProduct.stock, sku: fullProduct.sku,
     supplier_id: fullProduct.supplier_id, rating: 0, reviews: 0, sold: 0,
     description: fullProduct.description,
   };

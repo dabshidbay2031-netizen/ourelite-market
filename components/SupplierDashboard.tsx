@@ -4,16 +4,15 @@ import { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { CATEGORIES } from '@/lib/data';
+import { authHeaders } from '@/lib/clientAuth';
 import ProductImage from '@/components/ProductImage';
 import type { Supplier, Product, Order, PriceTier } from '@/lib/types';
 
-const EMOJI_OPTIONS = ['📦','📱','💻','🎧','👗','👟','🏠','🍎','💊','⚽','🎵','📷','🧴','🌿','☕','🍯','🥛','💡','🌬️','🩹','❤️','🧘','🪢','💪','🍶','🕶️','👔','📺','📲','⌚','🎮','🖱️','⌨️'];
 const BIZ_ICONS     = ['🏭','🏪','🏬','🏢','🏗️','🚚','📦','⚙️','🔧','🛒','💼','🌐'];
 
 type DashTab = 'products' | 'sales' | 'settings';
 
 interface SupplierProductFormData {
-  icon:        string;
   name:        string;
   category:    string;
   sku:         string;
@@ -29,7 +28,6 @@ interface SupplierProductFormData {
 }
 
 const emptyProductForm: SupplierProductFormData = {
-  icon:        '📦',
   name:        '',
   category:    'electronics',
   sku:         '',
@@ -73,7 +71,48 @@ export default function SupplierDashboard({ supplier }: Props) {
   const [settingIcon,     setSettingIcon]     = useState(supplier.icon     ?? '🏭');
   const [settingBio,      setSettingBio]      = useState(supplier.bio      ?? '');
   const [settingLocation, setSettingLocation] = useState(supplier.location ?? '');
+  const [settingLat,      setSettingLat]      = useState<number | null>(supplier.latitude  ?? null);
+  const [settingLng,      setSettingLng]      = useState<number | null>(supplier.longitude ?? null);
+  const [locating,        setLocating]        = useState(false);
   const [savingSettings,  setSavingSettings]  = useState(false);
+
+  /* One tap: request permission → read GPS → save the coordinates to the
+     store immediately (no separate Save step). */
+  function captureStoreLocation() {
+    if (!navigator.geolocation) { toast('Location not available on this device', 'error'); return; }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async pos => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        setSettingLat(lat);
+        setSettingLng(lng);
+        try {
+          const res = await fetch(`/api/suppliers/${supplier.id}`, {
+            method:  'PATCH',
+            headers: await authHeaders({ 'Content-Type': 'application/json' }),
+            body:    JSON.stringify({ latitude: lat, longitude: lng }),
+          });
+          if (res.ok) {
+            const saved = await res.json().catch(() => null);
+            if (saved?.skippedColumns?.length) {
+              toast('Got location, but the map needs the DB migration (suppliers lat/lng columns)', 'warning');
+            } else {
+              toast('📍 Store location saved', 'success');
+              await refreshAccount();
+            }
+          } else {
+            toast('Got your location but could not save it — try again', 'error');
+          }
+        } catch {
+          toast('Network error — location not saved', 'error');
+        }
+        setLocating(false);
+      },
+      () => { setLocating(false); toast('Could not get location. Allow permission and retry.', 'error'); },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }
 
   /* ── Load products on mount ───────────────────────────── */
   useEffect(() => {
@@ -150,7 +189,6 @@ export default function SupplierDashboard({ supplier }: Props) {
     setEditingProd(p);
     const tiers = p.priceTiers ?? [];
     setForm({
-      icon:        p.icon,
       name:        p.name,
       category:    p.category,
       sku:         p.sku,
@@ -179,7 +217,6 @@ export default function SupplierDashboard({ supplier }: Props) {
       price:       parseFloat(form.tier1Price) || 0,
       originalPrice: parseFloat(form.tier1Price) || 0,
       category:    form.category,
-      icon:        form.icon,
       stock:       form.stock,
       sku:         form.sku.trim() || undefined,
       description: form.description.trim(),
@@ -234,16 +271,23 @@ export default function SupplierDashboard({ supplier }: Props) {
     setSavingSettings(true);
     const res = await fetch(`/api/suppliers/${supplier.id}`, {
       method:  'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
       body:    JSON.stringify({
-        name:     settingName.trim(),
-        icon:     settingIcon,
-        bio:      settingBio.trim(),
-        location: settingLocation.trim(),
+        name:      settingName.trim(),
+        icon:      settingIcon,
+        bio:       settingBio.trim(),
+        location:  settingLocation.trim(),
+        latitude:  settingLat,
+        longitude: settingLng,
       }),
     });
     if (res.ok) {
-      toast('Settings saved', 'success');
+      const saved = await res.json().catch(() => null);
+      if (saved?.skippedColumns?.length) {
+        toast('Saved, but map needs the DB migration (suppliers lat/lng columns)', 'warning');
+      } else {
+        toast('Settings saved', 'success');
+      }
       await refreshAccount();
     } else {
       toast('Failed to save settings', 'error');
@@ -257,6 +301,7 @@ export default function SupplierDashboard({ supplier }: Props) {
       completed: { background: '#D1FAE5', color: '#065F46' },
       pending:   { background: '#FEF3C7', color: '#92400E' },
       cancelled: { background: '#FEE2E2', color: '#991B1B' },
+      deleted:   { background: '#F3F4F6', color: '#6B7280' },
     };
     const s = styles[status] ?? { background: 'var(--surface)', color: 'var(--text-muted)' };
     return (
@@ -364,7 +409,7 @@ export default function SupplierDashboard({ supplier }: Props) {
                 return (
                   <div key={p.id} className="biz-product-item">
                     <div className="biz-product-icon">
-                      <ProductImage icon={p.icon} imageUrl={(p as Product & {imageUrl?:string}).imageUrl} imageUrls={(p as Product & {imageUrls?:string[]}).imageUrls} name={p.name} style={{ borderRadius: 8 }} />
+                      <ProductImage imageUrl={(p as Product & {imageUrl?:string}).imageUrl} imageUrls={(p as Product & {imageUrls?:string[]}).imageUrls} name={p.name} style={{ borderRadius: 8 }} />
                     </div>
                     <div className="biz-product-info">
                       <div className="biz-product-name">{p.name}</div>
@@ -520,7 +565,7 @@ export default function SupplierDashboard({ supplier }: Props) {
                         const prod = products.find(p => p.id === item.id);
                         return (
                           <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.8rem', marginBottom: 2 }}>
-                            <span>{prod ? `${prod.icon} ${prod.name}` : `Product #${item.id}`}</span>
+                            <span>{prod ? prod.name : `Product #${item.id}`}</span>
                             <span style={{ color: 'var(--text-muted)' }}>×{item.qty}</span>
                           </div>
                         );
@@ -580,6 +625,46 @@ export default function SupplierDashboard({ supplier }: Props) {
           </div>
 
           <div className="form-group">
+            <label className="form-label">Map Pin (for customer directions)</label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={captureStoreLocation}
+                disabled={locating}
+              >
+                {locating ? 'Locating…' : '📍 Use my current location'}
+              </button>
+              {settingLat != null && settingLng != null ? (
+                <span style={{ fontSize: '.8rem', color: 'var(--success, #059669)', fontWeight: 600 }}>
+                  ✓ saved {settingLat.toFixed(5)}, {settingLng.toFixed(5)}
+                  <button
+                    type="button"
+                    disabled={locating}
+                    onClick={async () => {
+                      setSettingLat(null); setSettingLng(null);
+                      try {
+                        await fetch(`/api/suppliers/${supplier.id}`, {
+                          method: 'PATCH', headers: await authHeaders({ 'Content-Type': 'application/json' }),
+                          body: JSON.stringify({ latitude: null, longitude: null }),
+                        });
+                        await refreshAccount();
+                        toast('Map pin removed', 'default');
+                      } catch { /* noop */ }
+                    }}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', marginLeft: 6, fontSize: '.8rem' }}
+                  >clear</button>
+                </span>
+              ) : (
+                <span style={{ fontSize: '.8rem', color: 'var(--text-muted)' }}>No pin set</span>
+              )}
+            </div>
+            <div style={{ fontSize: '.72rem', color: 'var(--text-muted)', marginTop: 6 }}>
+              Tap once while standing at your store — it asks for location permission, then saves your map pin instantly.
+            </div>
+          </div>
+
+          <div className="form-group">
             <label className="form-label">Bio / Description</label>
             <textarea
               className="form-input"
@@ -628,7 +713,7 @@ export default function SupplierDashboard({ supplier }: Props) {
                     background: 'var(--border-light, #f1f5f9)', display: 'flex', alignItems: 'center',
                     justifyContent: 'center', border: '1.5px solid var(--border)', fontSize: 32,
                   }}>
-                    <ProductImage icon={form.icon} imageUrl={form.imageUrl || null} name="preview" style={{ borderRadius: 10 }} />
+                    <ProductImage imageUrl={form.imageUrl || null} name="preview" style={{ borderRadius: 10 }} />
                   </div>
                   <input
                     className="form-input"
@@ -639,23 +724,7 @@ export default function SupplierDashboard({ supplier }: Props) {
                   />
                 </div>
                 <div style={{ fontSize: '.75rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                  Paste a direct image link. Leave blank to use the emoji icon below.
-                </div>
-              </div>
-
-              {/* Fallback icon picker */}
-              <div className="form-group">
-                <label className="form-label">Fallback Icon {form.imageUrl ? <span style={{ color:'var(--text-muted)', fontWeight:400 }}>(hidden while photo is set)</span> : null}</label>
-                <div className="emoji-picker-row">
-                  {EMOJI_OPTIONS.map(em => (
-                    <button
-                      key={em}
-                      className={`avatar-opt ${form.icon === em ? 'selected' : ''}`}
-                      onClick={() => pf('icon', em)}
-                    >
-                      {em}
-                    </button>
-                  ))}
+                  Paste a direct image URL. An SVG placeholder is shown when no photo is set.
                 </div>
               </div>
 

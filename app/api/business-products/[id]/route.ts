@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
+import { requireClaimOwner } from '@/lib/apiAuth';
 
 /**
  * PATCH /api/business-products/[id]
@@ -7,9 +8,10 @@ import { getSupabaseAdmin } from '@/lib/supabase';
  */
 export async function PATCH(
   req: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const id   = parseInt(params.id, 10);
+  const id = parseInt((await params).id, 10);
+  { const denied = await requireClaimOwner(req, id); if (denied) return denied; }
   const body = await req.json();
 
   const updates: Record<string, unknown> = {};
@@ -50,10 +52,11 @@ export async function PATCH(
  * Remove a product from a business's store.
  */
 export async function DELETE(
-  _req: Request,
-  { params }: { params: { id: string } }
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const id = parseInt(params.id, 10);
+  const id = parseInt((await params).id, 10);
+  { const denied = await requireClaimOwner(req, id); if (denied) return denied; }
   const { error } = await getSupabaseAdmin()
     .from('business_products')
     .delete()

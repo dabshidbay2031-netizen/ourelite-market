@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
+import { requireStaff } from '@/lib/apiAuth';
 import { errMsg } from '@/lib/apiHelpers';
 
 function map(c: Record<string, unknown>) {
@@ -14,8 +15,9 @@ function map(c: Record<string, unknown>) {
   };
 }
 
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
-  const id   = params.id;
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  { const denied = await requireStaff(req); if (denied) return denied; }
+  const id   = (await params).id;
   const body = await req.json();
 
   const updates: Record<string, unknown> = {};
@@ -36,8 +38,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   return NextResponse.json(map(data));
 }
 
-export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
-  const id = params.id;
+export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  { const denied = await requireStaff(req); if (denied) return denied; }
+  const id = (await params).id;
   const { error } = await getSupabaseAdmin()
     .from('customers')
     .delete()

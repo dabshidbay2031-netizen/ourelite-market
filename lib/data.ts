@@ -124,6 +124,14 @@ export const SUBCATEGORIES: Record<string, SubCategory[]> = {
   ],
 };
 
+/* ── Mogadishu (Banaadir) delivery districts ─────────────────── */
+// Shown in checkout when the customer chooses Delivery.
+export const MOGADISHU_DISTRICTS: string[] = [
+  'Abdiaziz', 'Bondhere', 'Daynile', 'Dharkenley', 'Hamar-Jajab', 'Hamar-Weyne',
+  'Hodan', 'Howl-Wadag', 'Heliwaa', 'Karan', 'Kaxda', 'Shangani', 'Shibis',
+  'Waberi', 'Wadajir (Medina)', 'Warta Nabada', 'Yaqshid', 'Darusalaam', 'Gubadley',
+];
+
 /* ── Utility helpers ─────────────────────────────────────────── */
 export function getCategoryColor(id: string): string {
   return CATEGORIES.find(c => c.id === id)?.color ?? '#6366F1';

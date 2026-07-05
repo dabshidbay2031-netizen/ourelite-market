@@ -8,34 +8,27 @@ const nextConfig = {
   poweredByHeader: false,
   compress:        true,
 
-  // Skip ESLint during `next build` — linting runs in the editor,
-  // not as a build gate. Eliminates the eslint@8 deprecation warnings on Vercel.
-  eslint: { ignoreDuringBuilds: true },
-
   // Skip TypeScript build errors (tsc --noEmit is already clean, this just speeds up the build)
   typescript: { ignoreBuildErrors: false },
 
   // Turbopack is enabled via `next dev --turbo` in package.json.
   // These settings apply to both Turbopack and the webpack fallback.
   experimental: {
-    // Keep large browser-only packages out of the server bundle
-    serverComponentsExternalPackages: [
-      'firebase', '@firebase/app', '@firebase/auth',
-    ],
     // Tree-shake heavy packages — only include symbols actually imported
     optimizePackageImports: [
       '@supabase/supabase-js',
-      'firebase/auth',
-      'firebase/app',
     ],
   },
 
   async headers() {
     return [
-      {
+      // Immutable caching is correct in production (content-hashed files),
+      // but in dev it makes browsers keep stale chunks forever — causing
+      // hydration mismatches and old UI after every code change.
+      ...(process.env.NODE_ENV === 'production' ? [{
         source: '/_next/static/:path*',
         headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
-      },
+      }] : []),
       {
         source: '/:path*',
         headers: [

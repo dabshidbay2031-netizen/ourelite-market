@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { errMsg, isMissingTableError } from '@/lib/apiHelpers';
+import { requireUser } from '@/lib/apiAuth';
 
 /**
  * POST /api/wishlist/sync
@@ -8,9 +9,12 @@ import { errMsg, isMissingTableError } from '@/lib/apiHelpers';
  * Upserts the full wishlist for a user in one batch.
  */
 export async function POST(req: Request) {
-  const { userId, productIds } = await req.json();
-  if (!userId || !Array.isArray(productIds)) {
-    return NextResponse.json({ error: 'userId and productIds required' }, { status: 400 });
+  const auth = await requireUser(req);
+  if (auth instanceof Response) return auth;
+  const { productIds } = await req.json();
+  const userId = auth; // own wishlist only
+  if (!Array.isArray(productIds)) {
+    return NextResponse.json({ error: 'productIds required' }, { status: 400 });
   }
 
   try {

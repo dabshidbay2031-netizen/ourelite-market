@@ -1,6 +1,8 @@
 'use client';
 
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import QRCode from 'qrcode';
+import { isLogoUrl } from '@/components/StoreAvatar';
 import type { CartItem, Product } from '@/lib/types';
 
 interface ReceiptProps {
@@ -22,6 +24,23 @@ export default function Receipt({
   paymentMethod, items, products, subtotal, discount, total, onClose,
 }: ReceiptProps) {
   const ref = useRef<HTMLDivElement>(null);
+
+  /**
+   * QR code → live order page. Scanning it (store owner or customer)
+   * opens the REAL order from the database — current status, items,
+   * totals — not a static copy. Soft-deleted orders still resolve,
+   * labeled as deleted.
+   */
+  const orderUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/#/orders/${orderId}`;
+  const [qrDataUrl, setQrDataUrl] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    QRCode.toDataURL(orderUrl, { width: 132, margin: 1 })
+      .then(url => { if (!cancelled) setQrDataUrl(url); })
+      .catch(() => { /* receipt still works without the QR */ });
+    return () => { cancelled = true; };
+  }, [orderUrl]);
 
   function handlePrint() {
     const content = ref.current?.innerHTML ?? '';
@@ -72,7 +91,10 @@ export default function Receipt({
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric' });
   const timeStr = now.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' });
-  const pmLabel = paymentMethod === 'waafi' ? 'Waafi Pay' : paymentMethod === 'cash' ? 'Cash' : 'Card';
+  const pmLabel = paymentMethod === 'waafi' ? 'Waafi Pay'
+    : paymentMethod === 'cash' ? 'Cash'
+    : paymentMethod === 'sifalo' ? 'Sifalo Pay'
+    : 'Card';
 
   return (
     <>
@@ -104,7 +126,20 @@ export default function Receipt({
 
               {/* Business header */}
               <div className="r-head" style={{ textAlign:'center', paddingBottom:12, borderBottom:'2px dashed #000', marginBottom:12 }}>
-                {businessIcon && <div style={{ fontSize:28 }}>{businessIcon}</div>}
+                {businessIcon && (
+                  isLogoUrl(businessIcon) ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={businessIcon}
+                      alt={businessName ? `${businessName} logo` : 'Store logo'}
+                      width={56}
+                      height={56}
+                      style={{ display:'block', margin:'0 auto 2px', objectFit:'contain', maxHeight:56 }}
+                    />
+                  ) : (
+                    <div style={{ fontSize:28 }}>{businessIcon}</div>
+                  )
+                )}
                 <div style={{ fontSize:16, fontWeight:700, marginTop:4 }}>{businessName || 'Mogarenta'}</div>
                 <div style={{ fontSize:11, letterSpacing:2, textTransform:'uppercase', color:'#555', marginTop:2 }}>Receipt</div>
                 <div style={{ fontSize:11, marginTop:8, color:'#555' }}>
@@ -147,6 +182,23 @@ export default function Receipt({
                 )}
                 <div style={{ display:'flex', justifyContent:'space-between', fontSize:15, fontWeight:700, borderTop:'1px solid #000', paddingTop:6, marginTop:6 }}>
                   <span>TOTAL</span><span>${total.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* QR — scan to open the live order */}
+              <div style={{ textAlign:'center', padding:'12px 0', borderBottom:'2px dashed #000' }}>
+                {qrDataUrl && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={qrDataUrl}
+                    alt={`QR code for order ${orderId}`}
+                    width={132}
+                    height={132}
+                    style={{ display:'block', margin:'0 auto' }}
+                  />
+                )}
+                <div style={{ fontSize:10, color:'#555', marginTop:6, letterSpacing:1, textTransform:'uppercase' }}>
+                  Scan to view this order
                 </div>
               </div>
 

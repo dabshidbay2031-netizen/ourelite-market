@@ -10,7 +10,7 @@ import { useApp }  from '@/context/AppContext';
  */
 export default function WishlistSync() {
   const { user }              = useAuth();
-  const { loadWishlistFromDB, state, toggleWishlist } = useApp();
+  const { loadWishlistFromDB, state, wishlistLoaded } = useApp();
 
   // Load DB wishlist on login
   useEffect(() => {
@@ -19,11 +19,12 @@ export default function WishlistSync() {
     }
   }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sync local wishlist changes to DB when user is logged in
+  // Sync local wishlist changes to DB when user is logged in.
+  // Gated on wishlistLoaded so we never push BEFORE the DB merge (which
+  // would wipe the stored wishlist) — but once loaded, empty lists DO
+  // sync, so removing the last item actually persists.
   useEffect(() => {
-    if (!user?.id || state.wishlist.length === 0) return;
-    // Fire-and-forget: POST the full wishlist to ensure DB is in sync
-    // (we batch rather than calling per-item to reduce requests)
+    if (!user?.id || !wishlistLoaded) return;
     const sync = async () => {
       try {
         await fetch('/api/wishlist/sync', {
@@ -36,7 +37,7 @@ export default function WishlistSync() {
     // Debounce: only sync 2s after last change
     const timer = setTimeout(sync, 2000);
     return () => clearTimeout(timer);
-  }, [user?.id, state.wishlist]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [user?.id, wishlistLoaded, state.wishlist]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return null;
 }

@@ -1,9 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { onAuthStateChanged, signOut as fbSignOut, type User as FbUser } from 'firebase/auth';
 import type { User as SbUser } from '@supabase/supabase-js';
-import { firebaseAuth } from '@/lib/firebase';
 import { getSupabase } from '@/lib/supabase';
 import type { Supplier, UserProfile, AccountType } from '@/lib/types';
 
@@ -14,7 +12,7 @@ export interface AuthUser {
   phoneNumber:  string | null;
   displayName:  string | null;
   email:        string | null;
-  authProvider: 'firebase' | 'supabase';
+  authProvider: 'supabase';
 }
 
 interface AuthContextValue {
@@ -25,21 +23,12 @@ interface AuthContextValue {
   currentProfile:  UserProfile | null;
   signOut:         () => Promise<void>;
   refreshAccount:  () => Promise<void>;
-  updateProfile:   (data: Partial<Pick<UserProfile, 'fullName' | 'phone' | 'avatar'>>) => Promise<void>;
+  updateProfile:   (data: Partial<Pick<UserProfile, 'fullName' | 'phone' | 'avatar' | 'avatarUrl' | 'bio'>>) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-/* ── Mappers ─────────────────────────────────────────────────────── */
-function toFirebaseUser(fb: FbUser): AuthUser {
-  return {
-    id: fb.uid, uid: fb.uid,
-    phoneNumber: fb.phoneNumber,
-    displayName: fb.displayName,
-    email: fb.email,
-    authProvider: 'firebase',
-  };
-}
+/* ── Mapper ──────────────────────────────────────────────────────── */
 function toSupabaseUser(sb: SbUser): AuthUser {
   return {
     id: sb.id, uid: sb.id,
@@ -57,21 +46,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [accountType,     setAccountType]     = useState<AccountType | null>(null);
   const [loading,         setLoading]         = useState(true);
 
-  /**
-   * Independent state for each provider. Whichever has a session wins,
-   * Supabase preferred. We recompute the effective user whenever either
-   * provider reports — this prevents one provider's "no session" from
-   * wiping out the other's valid session (the refresh-logout bug).
-   */
-  const fbUserRef = useRef<AuthUser | null>(null);
-  const sbUserRef = useRef<AuthUser | null>(null);
-  const fbReady   = useRef(false);
-  const sbReady   = useRef(false);
   const lastResolvedUid = useRef<string | null>(null);
+  // Ref mirror of accountType: the auth listener is registered once with
+  // [] deps, so reading the STATE here would always see the first render's
+  // null (stale closure) and the early-exit below could never fire.
+  const accountTypeRef  = useRef<AccountType | null>(null);
+
+  /** Keep the state and the ref in lockstep */
+  function applyAccountType(t: AccountType | null) {
+    accountTypeRef.current = t;
+    setAccountType(t);
+  }
 
   /* ── Look up Supabase profile / supplier by UID ──────────────── */
-  async function resolveAccount(uid: string) {
-    if (lastResolvedUid.current === uid && accountType) return; // already resolved
+  async function resolveAccount(uid: string, sbUser?: SbUser) {
+    if (lastResolvedUid.current === uid && accountTypeRef.current) return; // already resolved
     lastResolvedUid.current = uid;
     try {
       const res  = await fetch(`/api/suppliers?authUserId=${uid}`);
@@ -80,99 +69,106 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (sup) {
         setCurrentSupplier(sup);
         setCurrentProfile(null);
-        setAccountType((sup.accountType === 'supplier' ? 'supplier' : 'business') as AccountType);
+        const t = sup.accountType === 'supplier' ? 'supplier' : sup.accountType === 'agent' ? 'agent' : 'business';
+        applyAccountType(t as AccountType);
         return;
       }
     } catch { /* ignore */ }
     try {
-      const res  = await fetch(`/api/profile?userId=${uid}`);
+      const res  = await fetch(`/api/profile?userId=${encodeURIComponent(uid)}`);
       const data = await res.json();
-      if (data?.id) { setCurrentProfile(data); setCurrentSupplier(null); setAccountType('user'); return; }
+      if (data?.id) { setCurrentProfile(data); setCurrentSupplier(null); applyAccountType('user'); return; }
     } catch { /* ignore */ }
-    setCurrentSupplier(null); setCurrentProfile(null); setAccountType(null);
+
+    // No profile or supplier found — auto-create a profile so the user is
+    // never left in a broken "no account type" state after signing up.
+    if (sbUser) {
+      try {
+        const res = await fetch('/api/profile', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id:       uid,
+            fullName: (sbUser.user_metadata?.full_name as string | undefined) ?? sbUser.email ?? '',
+            phone:    sbUser.phone ?? '',
+            avatar:   '👤',
+          }),
+        });
+        if (res.ok) {
+          const profile = await res.json();
+          setCurrentProfile(profile);
+          setCurrentSupplier(null);
+          applyAccountType('user');
+          return;
+        }
+      } catch { /* ignore — fall through to null state */ }
+    }
+
+    setCurrentSupplier(null); setCurrentProfile(null); applyAccountType(null);
   }
 
-  /* ── Recompute the effective user from both providers ─────────── */
-  function recompute() {
-    // Supabase session takes priority, then Firebase
-    const effective = sbUserRef.current ?? fbUserRef.current;
+  /* ── Apply the current Supabase session ───────────────────────── */
+  function applySession(sbUser: SbUser | null) {
+    const effective = sbUser ? toSupabaseUser(sbUser) : null;
 
     setUser(prev => {
       // Avoid needless re-renders / re-resolves when nothing changed
-      if (prev?.id === effective?.id && prev?.authProvider === effective?.authProvider) {
-        return prev;
-      }
+      if (prev?.id === effective?.id) return prev;
       return effective;
     });
 
     if (effective) {
-      resolveAccount(effective.id);
+      resolveAccount(effective.id, sbUser ?? undefined);
     } else {
       lastResolvedUid.current = null;
       setCurrentSupplier(null);
       setCurrentProfile(null);
-      setAccountType(null);
+      applyAccountType(null);
     }
-
-    // Only stop the loading spinner once BOTH providers have reported their
-    // initial state — this is what keeps the user logged in across refresh.
-    if (fbReady.current && sbReady.current) setLoading(false);
+    setLoading(false);
   }
 
-  /* ── Auth listeners ──────────────────────────────────────────── */
+  /* ── Auth listener ───────────────────────────────────────────── */
   useEffect(() => {
     const sb = getSupabase();
 
     const { data: { subscription } } = sb.auth.onAuthStateChange((_event, session) => {
-      sbUserRef.current = session?.user ? toSupabaseUser(session.user) : null;
-      sbReady.current   = true;
-      recompute();
-    });
-
-    const unsubFb = onAuthStateChanged(firebaseAuth, (fbUser) => {
-      fbUserRef.current = fbUser ? toFirebaseUser(fbUser) : null;
-      fbReady.current   = true;
-      recompute();
+      applySession(session?.user ?? null);
     });
 
     // Safety: never let the UI hang on loading more than 8s
-    const timeout = setTimeout(() => {
-      fbReady.current = true;
-      sbReady.current = true;
-      recompute();
-      setLoading(false);
-    }, 8000);
+    const timeout = setTimeout(() => setLoading(false), 8000);
 
     return () => {
       subscription.unsubscribe();
-      unsubFb();
       clearTimeout(timeout);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── Sign out ────────────────────────────────────────────────── */
   const signOut = async () => {
-    const provider = user?.authProvider;
-    // Clear local refs immediately so recompute doesn't restore the user
-    fbUserRef.current = null;
-    sbUserRef.current = null;
+    // Clear local state immediately so the UI reflects the sign-out at once
     lastResolvedUid.current = null;
-    setUser(null); setCurrentSupplier(null); setCurrentProfile(null); setAccountType(null);
+    setUser(null); setCurrentSupplier(null); setCurrentProfile(null); applyAccountType(null);
     try {
-      if (provider === 'firebase') await fbSignOut(firebaseAuth);
-      else                          await getSupabase().auth.signOut();
-    } catch { /* ignore */ }
+      await getSupabase().auth.signOut();
+    } catch (e) {
+      // The local session is cleared, but the provider session may survive
+      // a refresh — surface it instead of hiding it.
+      console.error('[Auth] sign-out failed; session may persist after refresh:', e);
+    }
   };
 
   /* ── Refresh account data ────────────────────────────────────── */
   const refreshAccount = async () => {
     if (!user) return;
     lastResolvedUid.current = null; // force re-resolve
-    await resolveAccount(user.id);
+    const { data: { user: sbUser } } = await getSupabase().auth.getUser();
+    await resolveAccount(user.id, sbUser ?? undefined);
   };
 
   /* ── Update profile ──────────────────────────────────────────── */
-  const updateProfile = async (updates: Partial<Pick<UserProfile, 'fullName' | 'phone' | 'avatar'>>) => {
+  const updateProfile = async (updates: Partial<Pick<UserProfile, 'fullName' | 'phone' | 'avatar' | 'avatarUrl' | 'bio'>>) => {
     if (!user) return;
     if (!currentProfile) {
       const res = await fetch('/api/profile', {
@@ -184,6 +180,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }),
       });
       if (res.ok) setCurrentProfile(await res.json());
+      else throw new Error('Profile create failed');
       return;
     }
     const res = await fetch(`/api/profile/${user.id}`, {
@@ -192,6 +189,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       body:    JSON.stringify(updates),
     });
     if (res.ok) setCurrentProfile(await res.json());
+    else throw new Error('Profile update failed');
   };
 
   return (

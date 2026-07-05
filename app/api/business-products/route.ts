@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
+import { requireStaff, getAuthUser, ownsStoreOrAdmin } from '@/lib/apiAuth';
 import { errMsg, isMissingTableError } from '@/lib/apiHelpers';
 
 function mapProduct(p: Record<string, unknown>) {
@@ -67,6 +68,7 @@ export async function GET(req: Request) {
 
 /** POST /api/business-products — claim a product into a business's store */
 export async function POST(req: Request) {
+  { const denied = await requireStaff(req); if (denied) return denied; }
   const body = await req.json();
   const { supplierId, productId, customPrice, stockQty = 0, moq = 1 } = body;
 
@@ -77,19 +79,45 @@ export async function POST(req: Request) {
     );
   }
 
+  // A store may only claim products INTO ITS OWN inventory — otherwise any
+  // business could stuff products into a rival's store by spoofing supplierId.
+  const user = await getAuthUser(req);
+  if (!user || !(await ownsStoreOrAdmin(user.id, parseInt(String(supplierId), 10)))) {
+    return NextResponse.json({ error: 'Forbidden — not your store' }, { status: 403 });
+  }
+
   try {
-    const { data, error } = await getSupabaseAdmin()
+    const sb = getSupabaseAdmin();
+    const payload = {
+      supplier_id:  parseInt(String(supplierId), 10),
+      product_id:   parseInt(String(productId),  10),
+      custom_price: parseFloat(String(customPrice)),
+      stock_qty:    parseInt(String(stockQty),    10),
+      moq:          Math.max(1, parseInt(String(moq), 10)),
+      is_active:    true,
+    };
+
+    let { data, error } = await sb
       .from('business_products')
-      .upsert({
-        supplier_id:  parseInt(String(supplierId), 10),
-        product_id:   parseInt(String(productId),  10),
-        custom_price: parseFloat(String(customPrice)),
-        stock_qty:    parseInt(String(stockQty),    10),
-        moq:          Math.max(1, parseInt(String(moq), 10)),
-        is_active:    true,
-      }, { onConflict: 'supplier_id,product_id' })
+      .upsert(payload, { onConflict: 'supplier_id,product_id' })
       .select('*, products(*)')
       .single();
+
+    // Self-heal a desynced SERIAL sequence: rows were seeded with explicit ids,
+    // so the `id` sequence can lag behind max(id) and a fresh claim's INSERT
+    // collides on the primary key. Assign the next id explicitly and retry so
+    // the claim still succeeds (the permanent fix is scripts/fix-bp-sequence.sql).
+    if (error && /business_products_pkey/i.test(error.message ?? '')) {
+      const { data: top } = await sb
+        .from('business_products')
+        .select('id').order('id', { ascending: false }).limit(1).maybeSingle();
+      const nextId = ((top?.id as number) ?? 0) + 1;
+      ({ data, error } = await sb
+        .from('business_products')
+        .insert({ id: nextId, ...payload })
+        .select('*, products(*)')
+        .single());
+    }
 
     if (error) throw error;
     return NextResponse.json(mapBP(data as Record<string, unknown>), { status: 201 });
