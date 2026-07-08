@@ -24,6 +24,8 @@ interface Props {
   onClaim?:         (id: number) => void;
   /** Human-readable store area (district recognised from the store's GPS). */
   storeDistrict?:   string | null;
+  /** The selling store is internet-only — show "🌐 Online store" not a district. */
+  storeOnlineOnly?: boolean;
 }
 
 /**
@@ -34,7 +36,7 @@ interface Props {
 function ProductCard({
   product, isWishlisted, stock, onAddToCart, onToggleWishlist,
   canClaim = false, isClaimed = false, claiming = false, onClaim,
-  storeDistrict = null,
+  storeDistrict = null, storeOnlineOnly = false,
 }: Props) {
   const router  = useRouter();
   const color   = getCategoryColor(product.category);
@@ -135,7 +137,13 @@ function ProductCard({
 
       <div className="product-body">
         <div className="product-name">{product.name}</div>
-        {storeDistrict && (
+        {storeOnlineOnly ? (
+          <div
+            style={{ fontSize: '.72rem', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--primary)' }}
+          >
+            🌐 Online store
+          </div>
+        ) : storeDistrict && (
           <div
             className="text-muted"
             style={{ fontSize: '.72rem', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}

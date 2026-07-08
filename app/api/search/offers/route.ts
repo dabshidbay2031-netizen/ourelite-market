@@ -34,7 +34,8 @@ interface Offer {
     name:       string;
     slug:       string | null;
     icon:       string;
-    location:   string | null;     // human label, e.g. district
+    location:   string | null;     // human label, e.g. district (or "Online store")
+    onlineOnly: boolean;           // internet-only store — no pickup / distance
     distanceKm: number | null;     // null when either side lacks coordinates
     rating:     number;
   };
@@ -81,7 +82,9 @@ export async function GET(req: Request) {
         .select('supplier_id, product_id, custom_price, stock_qty, is_active')
         .in('product_id', matchedIds)
         .eq('is_active', true),
-      sb.from('suppliers').select('id, name, slug, icon, location, latitude, longitude, rating'),
+      // select('*') so a pre-migration DB (no online_only column yet) doesn't
+      // error the whole query — online_only just reads back as undefined → false.
+      sb.from('suppliers').select('*'),
     ]);
     if (sErr) throw sErr;
 
@@ -90,22 +93,26 @@ export async function GET(req: Request) {
     const storeMeta = (sid: number, dist: number | null) => {
       const s = supplierById.get(sid);
       if (!s) return null;
+      const online = Boolean(s.online_only ?? false);
       return {
         id:         sid,
         name:       String(s.name ?? 'Store'),
         slug:       (s.slug as string | null) ?? null,
         icon:       String(s.icon ?? '🏪'),
-        // Recognised district from GPS beats the store's free-text location
-        location:   districtFor(s.latitude as number | null, s.longitude as number | null)
-                      ?? ((s.location as string | null) || null),
+        onlineOnly: online,
+        // Online-only → clear label; else recognised district from GPS beats free-text
+        location:   online ? 'Online store'
+                    : (districtFor(s.latitude as number | null, s.longitude as number | null)
+                       ?? ((s.location as string | null) || null)),
         distanceKm: dist,
         rating:     Number(s.rating ?? 0),
       };
     };
 
+    // Online-only stores have no meaningful distance even if a stale pin exists.
     const distFor = (sid: number): number | null => {
       const s = supplierById.get(sid);
-      if (!hasPos || !s || s.latitude == null || s.longitude == null) return null;
+      if (!hasPos || !s || s.online_only || s.latitude == null || s.longitude == null) return null;
       return distanceKm(lat, lng, Number(s.latitude), Number(s.longitude));
     };
 

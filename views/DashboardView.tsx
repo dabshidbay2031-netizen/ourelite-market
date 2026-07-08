@@ -6,6 +6,7 @@ import Header from '@/components/Header';
 import { useApp } from '@/context/AppContext';
 import { useIsAdmin } from '@/lib/useIsAdmin';
 import { useLiveRefresh } from '@/lib/useLiveRefresh';
+import { useRealtimePing } from '@/lib/useRealtimePing';
 import ErrorState from '@/components/ErrorState';
 import { CATEGORIES } from '@/lib/data';
 import { sumRevenue, isRevenueOrder } from '@/lib/revenue';
@@ -49,8 +50,9 @@ export default function DashboardPage() {
     finally { if (!silent) setLoaded(true); }
   }, []);
   useEffect(() => { loadOrders(); }, [loadOrders]);
-  // Live: refresh silently every 12s + on tab focus (admins only view this).
-  useLiveRefresh(() => loadOrders(true), { enabled: isAdmin });
+  // Live: realtime ping on any order event (admin global view), poll fallback.
+  useRealtimePing([isAdmin ? 'orders' : null], () => loadOrders(true));
+  useLiveRefresh(() => loadOrders(true), { enabled: isAdmin, intervalMs: 30000 });
 
   const hasOrders = realOrders.length > 0;
 

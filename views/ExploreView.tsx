@@ -10,6 +10,7 @@ import { useAuth } from '@/context/AuthContext';
 import { CATEGORIES, SUBCATEGORIES } from '@/lib/data';
 import { useClaimProduct } from '@/lib/useClaimProduct';
 import { useIncrementalList } from '@/lib/useIncrementalList';
+import { useHeroBanner } from '@/lib/useHeroBanner';
 import { districtFor } from '@/lib/districts';
 
 export default function ExplorePage() {
@@ -18,6 +19,7 @@ export default function ExplorePage() {
   const { accountType } = useAuth();
   const { products, loading } = state;
   const { canClaim, claim, isMine, claimingId } = useClaimProduct();
+  const hero = useHeroBanner();
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
   const [activeSub, setActiveSub] = useState('all');
@@ -36,6 +38,11 @@ export default function ExplorePage() {
   const districtBySupplier = useMemo(() =>
     new Map(state.suppliers.map(s =>
       [s.id, districtFor(s.latitude, s.longitude) ?? (s.location || null)])),
+  [state.suppliers]);
+
+  // Which stores are internet-only (no shopfront) → card shows "🌐 Online store".
+  const onlineBySupplier = useMemo(() =>
+    new Map(state.suppliers.map(s => [s.id, !!s.onlineOnly])),
   [state.suppliers]);
 
   const filtered = useMemo(() => {
@@ -73,18 +80,25 @@ export default function ExplorePage() {
     <div className="page-anim">
       <Header searchQuery={search} onSearch={setSearch} />
 
-      {/* Hot Deals Banner */}
-      {!search && activeCategory === 'all' && (
-        <div className="banner">
-          <div>
-            <span className="banner-tag">🔥 Hot Deals</span>
-            <h2>Up to 30% Off<br/>This Week</h2>
-            <p>Limited time offers on top products</p>
-            <button className="btn btn-secondary btn-sm" onClick={() => setCartOpen(true)}>
-              Shop Now
-            </button>
+      {/* Hot Deals Banner — copy & image configurable by admins (Admin → Storefront) */}
+      {!search && activeCategory === 'all' && hero.enabled && (
+        <div className={`banner${hero.imageUrl ? ' banner-has-photo' : ''}`}>
+          {hero.imageUrl && (
+            // Full-bleed hero photo behind the copy (aria-hidden — decorative)
+            // eslint-disable-next-line @next/next/no-img-element
+            <img className="banner-bg" src={hero.imageUrl} alt="" aria-hidden="true" />
+          )}
+          <div className="banner-content">
+            {hero.tag && <span className="banner-tag">{hero.tag}</span>}
+            {hero.title && <h2>{hero.title}</h2>}
+            {hero.subtitle && <p>{hero.subtitle}</p>}
+            {hero.ctaLabel && (
+              <button className="btn btn-secondary btn-sm" onClick={() => setCartOpen(true)}>
+                {hero.ctaLabel}
+              </button>
+            )}
           </div>
-          <span className="banner-emoji">🛍️</span>
+          {!hero.imageUrl && <span className="banner-emoji">🛍️</span>}
         </div>
       )}
 
@@ -196,6 +210,7 @@ export default function ExplorePage() {
                 key={p.id}
                 product={p}
                 storeDistrict={p.supplierId != null ? districtBySupplier.get(p.supplierId) ?? null : null}
+                storeOnlineOnly={p.supplierId != null ? onlineBySupplier.get(p.supplierId) ?? false : false}
                 isWishlisted={wishlistSet.has(p.id)}
                 stock={inventoryMap.get(p.id) ?? p.stock}
                 onAddToCart={addToCart}

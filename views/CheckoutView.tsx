@@ -31,6 +31,8 @@ export default function CheckoutPage() {
   const shopId = params.shopId ? parseInt(params.shopId, 10) : null;
   const shop   = shopId != null ? suppliers.find(s => s.id === shopId) : null;
   const shopName = shop?.name ?? 'Mogarenta';
+  // Online-only stores have no shopfront → delivery is the only option.
+  const onlineOnly = !!shop?.onlineOnly;
 
   const shopCart = useMemo(() => {
     if (shopId == null) return cart;
@@ -56,6 +58,11 @@ export default function CheckoutPage() {
   const [district,      setDistrict]      = useState('');
   const [deliveryNotes, setDeliveryNotes] = useState('');
 
+  // Payment method — Cash (pay on delivery/pickup) or Sifalo Pay wallet.
+  const [payMethod, setPayMethod] = useState<'cash' | 'sifalo'>('cash');
+  // Contact phone for cash orders (delivery/pickup coordination).
+  const [phone, setPhone] = useState('');
+
   // Sifalo Pay (on OUR page) — wallet type + number. No redirect to Sifalo.
   const [sifaloGateway, setSifaloGateway] = useState<SifaloGateway>('waafi');
   const [sifaloAccount, setSifaloAccount] = useState('');
@@ -80,13 +87,14 @@ export default function CheckoutPage() {
   const discountAmt = couponDiscount;
   const total       = Math.max(0, subtotal + vatAmount - discountAmt);
 
-  // Pre-fill name from profile
+  // Pre-fill name + phone from profile
   useEffect(() => {
     if (user?.displayName) setName(user.displayName);
+    if (user?.phoneNumber) setPhone(user.phoneNumber.replace(/\D/g, '').replace(/^252/, ''));
   }, [user]);
 
-  // Sifalo Pay is the only payment method.
-  useEffect(() => { setPaymentMethod('sifalo'); }, [setPaymentMethod]);
+  // Keep the global payment method in sync with the picker (used on the receipt).
+  useEffect(() => { setPaymentMethod(payMethod); }, [payMethod, setPaymentMethod]);
 
   if (shopCart.length === 0 && paymentState !== 'success') {
     return (
@@ -148,8 +156,11 @@ export default function CheckoutPage() {
     return parts.join(' — ');
   };
 
-  /* ── Place the order on THIS page (after a successful on-page charge). ── */
+  /* ── Place the order on THIS page.
+     For Sifalo this runs only AFTER a confirmed on-page charge (sifaloSid set);
+     for Cash it records a pay-on-delivery order with no charge. ── */
   const placeOrderNow = async (sifaloSid: string | null) => {
+    const contactPhone = payMethod === 'sifalo' ? `+252${sifaloAccount}` : `+252${phone}`;
     const notes = [deliveryNote(), sifaloSid ? `Sifalo SID: ${sifaloSid}` : null].filter(Boolean).join(' | ') || null;
 
     // The server is the source of truth: it prices the items from the DB,
@@ -162,10 +173,10 @@ export default function CheckoutPage() {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
           customerName:  name,
-          customerPhone: `+252${sifaloAccount}`,
+          customerPhone: contactPhone,
           userId:        user?.id ?? null,
           items:         shopCart.map(i => ({ id: i.id, qty: i.qty })),
-          paymentMethod: 'sifalo',
+          paymentMethod: payMethod,
           couponCode:    appliedCoupon?.code ?? null,
           notes,
         }),
@@ -188,7 +199,16 @@ export default function CheckoutPage() {
     shopCart.forEach(i => removeFromCart(i.id));
     reloadProducts().catch(() => {});
     setPaymentState('success');
-    toast('Payment successful!', 'success');
+    toast(payMethod === 'cash' ? 'Order placed!' : 'Payment successful!', 'success');
+  };
+
+  /* ── Place a CASH (pay-on-delivery/pickup) order — no gateway charge. ── */
+  const placeCashOrder = async () => {
+    if (!name.trim()) { toast('Please enter your name', 'error'); return; }
+    if (fulfillment === 'delivery' && !district) { toast('Please choose your delivery district', 'error'); return; }
+    if (phone.length < 7) { toast('Please enter a valid phone number', 'error'); return; }
+    setPaymentState('pending');
+    await placeOrderNow(null);
   };
 
   /* ── Pay with Sifalo, ON OUR PAGE (direct wallet debit) ──────────────
@@ -233,9 +253,13 @@ export default function CheckoutPage() {
         <Header showSearch={false} />
         <div className="payment-pending">
           <div className="spinner" />
-          <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: 8 }}>Processing Payment…</div>
+          <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: 8 }}>
+            {payMethod === 'cash' ? 'Placing Order…' : 'Processing Payment…'}
+          </div>
           <div style={{ color: 'var(--text-muted)', fontSize: '.88rem' }}>
-            Confirming with Sifalo Pay — approve the request on your phone.
+            {payMethod === 'cash'
+              ? 'Confirming your order — one moment.'
+              : 'Confirming with Sifalo Pay — approve the request on your phone.'}
           </div>
         </div>
       </div>
@@ -253,11 +277,16 @@ export default function CheckoutPage() {
               <path d="m8.5 12.5 2.5 2.5 5-6"/>
             </svg>
           </div>
-          <div className="success-title">Payment Successful!</div>
-          <div className="success-subtitle">Your order has been placed</div>
+          <div className="success-title">{paymentMethod === 'cash' ? 'Order Placed!' : 'Payment Successful!'}</div>
+          <div className="success-subtitle">
+            {paymentMethod === 'cash' ? 'Pay with cash on delivery/pickup' : 'Your order has been placed'}
+          </div>
           <div className="success-order-box">
             <div className="success-order-id">{lastOrderId || 'Order Confirmed'}</div>
-            <div className="success-order-total">Total paid: <strong>${receiptTotal.toFixed(2)}</strong></div>
+            <div className="success-order-total">
+              {paymentMethod === 'cash' ? 'Total (pay on delivery): ' : 'Total paid: '}
+              <strong>${receiptTotal.toFixed(2)}</strong>
+            </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
             <button
@@ -339,27 +368,38 @@ export default function CheckoutPage() {
           </div>
         </div>
 
-        {/* Fulfillment — Pickup or Delivery (Mogadishu districts) */}
+        {/* Fulfillment — Pickup or Delivery (Mogadishu districts).
+            Online-only stores have no shopfront, so only Delivery is offered. */}
         <div className="checkout-section">
           <div className="checkout-section-title">🚚 Delivery</div>
-          <div className="fulfill-toggle">
-            <button
-              type="button"
-              className={`fulfill-opt ${fulfillment === 'delivery' ? 'active' : ''}`}
-              onClick={() => setFulfillment('delivery')}
-            >
-              🛵 Delivery
-            </button>
-            <button
-              type="button"
-              className={`fulfill-opt ${fulfillment === 'pickup' ? 'active' : ''}`}
-              onClick={() => setFulfillment('pickup')}
-            >
-              🏬 Pickup
-            </button>
-          </div>
+          {onlineOnly ? (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px',
+              borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--border)',
+              fontSize: '.85rem', fontWeight: 600, color: 'var(--primary)',
+            }}>
+              🌐 Online store — delivered to your address (no pickup)
+            </div>
+          ) : (
+            <div className="fulfill-toggle">
+              <button
+                type="button"
+                className={`fulfill-opt ${fulfillment === 'delivery' ? 'active' : ''}`}
+                onClick={() => setFulfillment('delivery')}
+              >
+                🛵 Delivery
+              </button>
+              <button
+                type="button"
+                className={`fulfill-opt ${fulfillment === 'pickup' ? 'active' : ''}`}
+                onClick={() => setFulfillment('pickup')}
+              >
+                🏬 Pickup
+              </button>
+            </div>
+          )}
 
-          {fulfillment === 'delivery' ? (
+          {(onlineOnly || fulfillment === 'delivery') ? (
             <>
               <div className="form-group" style={{ marginTop: 12 }}>
                 <label className="form-label">District (Mogadishu)</label>
@@ -443,11 +483,61 @@ export default function CheckoutPage() {
             <label className="form-label">Full Name</label>
             <input className="form-input" placeholder="Enter your name" value={name} onChange={e => setName(e.target.value)} />
           </div>
+          {payMethod === 'cash' && (
+            <div className="form-group">
+              <label className="form-label">Phone Number</label>
+              <div className="waafi-input-wrap">
+                <span className="waafi-prefix">+252</span>
+                <input
+                  className="waafi-phone"
+                  placeholder="61 XXX XXXX"
+                  value={phone}
+                  onChange={e => setPhone(e.target.value.replace(/\D/g, ''))}
+                  maxLength={9}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Payment — Sifalo Pay, entered and charged on OUR own page */}
+        {/* Payment — Cash on delivery/pickup, or Sifalo Pay on our own page */}
         <div className="checkout-section">
           <div className="checkout-section-title">Payment</div>
+
+          {/* Method picker (like the POS) */}
+          <div className="fulfill-toggle" style={{ marginBottom: 12 }}>
+            <button
+              type="button"
+              className={`fulfill-opt ${payMethod === 'cash' ? 'active' : ''}`}
+              onClick={() => setPayMethod('cash')}
+            >
+              💵 Cash
+            </button>
+            <button
+              type="button"
+              className={`fulfill-opt ${payMethod === 'sifalo' ? 'active' : ''}`}
+              onClick={() => setPayMethod('sifalo')}
+            >
+              📱 SifaloPay
+            </button>
+          </div>
+
+          {payMethod === 'cash' ? (
+            <div className="sifalo-box">
+              <div className="sifalo-head">
+                <span style={{ fontWeight: 800, fontSize: '1rem' }}>💵 Cash</span>
+                <span className="sifalo-amount">${total.toFixed(2)}</span>
+              </div>
+              <div className="sifalo-sub">
+                {fulfillment === 'pickup'
+                  ? 'Pay with cash when you collect your order at the store.'
+                  : 'Pay with cash to the rider when your order is delivered.'}
+              </div>
+              <button className="btn btn-primary btn-full btn-lg" style={{ marginTop: 12 }} onClick={placeCashOrder}>
+                Place Order · ${total.toFixed(2)}
+              </button>
+            </div>
+          ) : (
           <div className="sifalo-box">
             <div className="sifalo-head">
               <span className="sifalo-logo">Sifalo<span>Pay</span></span>
@@ -482,6 +572,7 @@ export default function CheckoutPage() {
               🇸🇴 Pay ${total.toFixed(2)}
             </button>
           </div>
+          )}
         </div>
       </div>
     </div>

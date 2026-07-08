@@ -28,10 +28,14 @@ describe('roleFor', () => {
 });
 
 describe('isBusinessRoute', () => {
-  it.each(['/dashboard', '/my-dashboard', '/pos', '/inventory', '/customers', '/suppliers', '/admin'])(
+  it.each(['/dashboard', '/my-dashboard', '/pos', '/inventory', '/customers', '/suppliers', '/staff'])(
     '%s is business-only', (path) => {
       expect(isBusinessRoute(path)).toBe(true);
     });
+
+  it('/admin is NOT gated as a business route — platform admins are often plain accounts; AdminDashboard self-gates via /api/admin/check', () => {
+    expect(isBusinessRoute('/admin')).toBe(false);
+  });
 
   it('subpaths of business routes are business-only', () => {
     expect(isBusinessRoute('/inventory/edit')).toBe(true);

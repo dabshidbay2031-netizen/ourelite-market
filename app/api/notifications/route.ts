@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { errMsg, jsonWithEtag } from '@/lib/apiHelpers';
+import { pingRealtime } from '@/lib/realtimeServer';
 
 export async function GET(req: Request) {
   try {
@@ -44,6 +45,7 @@ export async function POST(req: Request) {
       .select()
       .single();
     if (error) throw error;
+    pingRealtime(['notifications']); // alert bell updates instantly everywhere
     return NextResponse.json({ id: data.id, type: data.type, title: data.title, message: data.message, time: data.time_ago, read: data.read, icon: data.icon }, { status: 201 });
   } catch (e) {
     return NextResponse.json({ error: errMsg(e) }, { status: 500 });

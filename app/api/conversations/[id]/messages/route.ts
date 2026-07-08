@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { errMsg, isMissingTableError } from '@/lib/apiHelpers';
 import { getAuthUser } from '@/lib/apiAuth';
+import { pingRealtime, runAfterResponse } from '@/lib/realtimeServer';
+import { sendPushToUsers } from '@/lib/pushNotify';
 
 /**
  * Authorize the caller as a participant of the conversation.
@@ -112,6 +114,23 @@ export async function POST(
       .from('conversations')
       .update({ updated_at: new Date().toISOString() })
       .eq('id', convId);
+
+    // Live fan-out to the OTHER participant: realtime ping (chat list bumps
+    // instantly) + Web Push if their browser is subscribed. The open room
+    // itself already streams the row via postgres_changes.
+    runAfterResponse(async () => {
+      const { data: conv } = await getSupabaseAdmin()
+        .from('conversations').select('user_id_1, user_id_2').eq('id', convId).maybeSingle();
+      if (!conv) return;
+      const other = String(conv.user_id_1) === senderId ? String(conv.user_id_2) : String(conv.user_id_1);
+      pingRealtime([`user:${other}`]);
+      await sendPushToUsers([other], {
+        title: '💬 New message',
+        body:  messageType === 'image' ? '📷 Photo' : String(content ?? '').slice(0, 120),
+        url:   `/#/chat/${convId}`,
+        tag:   `chat-${convId}`,
+      });
+    });
 
     return NextResponse.json(mapMsg(data as Record<string, unknown>), { status: 201 });
   } catch (e) {

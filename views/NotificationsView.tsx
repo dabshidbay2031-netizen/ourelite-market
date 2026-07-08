@@ -1,8 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Header from '@/components/Header';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
+import { isPushSupported, subscribeToPush } from '@/lib/push';
 
 const NOTIF_TYPES = [
   { value: 'stock',    label: '📦 Stock',    icon: '📦' },
@@ -14,8 +16,33 @@ const NOTIF_TYPES = [
 
 export default function NotificationsPage() {
   const { state, markAllRead, clearNotifications, toast } = useApp();
+  const { user } = useAuth();
   const { notifications } = state;
   const unread = notifications.filter(n => !n.read).length;
+
+  /* ── Web Push opt-in ──
+     Shown to signed-in users on supporting browsers until permission is
+     granted. The subscribe MUST happen in a click handler (user gesture). */
+  const [pushState, setPushState] = useState<'unavailable'|'prompt'|'granted'|'denied'>('unavailable');
+  const [enabling, setEnabling]   = useState(false);
+  useEffect(() => {
+    if (!isPushSupported()) { setPushState('unavailable'); return; }
+    const p = Notification.permission;
+    setPushState(p === 'granted' ? 'granted' : p === 'denied' ? 'denied' : 'prompt');
+  }, []);
+
+  const enablePush = async () => {
+    setEnabling(true);
+    const ok = await subscribeToPush();
+    setEnabling(false);
+    if (ok) { setPushState('granted'); toast('Push notifications enabled ✓', 'success'); }
+    else {
+      setPushState(Notification.permission === 'denied' ? 'denied' : 'prompt');
+      toast(Notification.permission === 'denied'
+        ? 'Notifications are blocked in your browser settings'
+        : 'Could not enable notifications', 'error');
+    }
+  };
 
   const [showForm, setShowForm]   = useState(false);
   const [nTitle, setNTitle]       = useState('');
@@ -79,6 +106,25 @@ export default function NotificationsPage() {
         </div>
       </div>
       <p className="page-subtitle">{unread} unread</p>
+
+      {/* Push opt-in banner */}
+      {user && pushState === 'prompt' && (
+        <div style={{ margin:'0 16px 12px', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:12, padding:'12px 14px', display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
+          <span style={{ fontSize:26 }}>📲</span>
+          <div style={{ flex:1, minWidth:180 }}>
+            <div style={{ fontWeight:700, fontSize:'.9rem' }}>Get instant notifications</div>
+            <div style={{ fontSize:'.78rem', color:'var(--text-muted)' }}>New orders, status updates and chat messages — even when the app is closed.</div>
+          </div>
+          <button className="btn btn-primary btn-sm" onClick={enablePush} disabled={enabling}>
+            {enabling ? 'Enabling…' : 'Enable'}
+          </button>
+        </div>
+      )}
+      {user && pushState === 'denied' && (
+        <div style={{ margin:'0 16px 12px', fontSize:'.78rem', color:'var(--text-muted)', padding:'0 2px' }}>
+          🔕 Push notifications are blocked — allow notifications for this site in your browser settings to receive order alerts.
+        </div>
+      )}
 
       {/* Create form */}
       {showForm && (

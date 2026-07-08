@@ -237,6 +237,10 @@ function SearchInner() {
       [s.id, districtFor(s.latitude, s.longitude) ?? (s.location || null)])),
   [state.suppliers]);
 
+  const onlineBySupplier = useMemo(() =>
+    new Map(state.suppliers.map(s => [s.id, !!s.onlineOnly])),
+  [state.suppliers]);
+
   const [query,           setQuery]           = useState(searchParams.get('q') ?? '');
   const [activeCategory,  setActiveCategory]  = useState('all');
   const [activeSubCat,    setActiveSubCat]    = useState('all');
@@ -481,8 +485,10 @@ function SearchInner() {
                   {s.name} {s.verified && <span title="Verified" style={{ color: 'var(--primary, #4F46E5)' }}>✔</span>}
                 </div>
                 <div className="text-muted text-sm" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {districtBySupplier.get(s.id) ?? 'Store'}
-                  {s.distKm != null && <span style={{ fontWeight: 700, color: 'var(--primary, #4F46E5)' }}> · {formatDistance(s.distKm)}</span>}
+                  {onlineBySupplier.get(s.id)
+                    ? <span style={{ color: 'var(--primary, #4F46E5)', fontWeight: 700 }}>🌐 Online store</span>
+                    : (districtBySupplier.get(s.id) ?? 'Store')}
+                  {!onlineBySupplier.get(s.id) && s.distKm != null && <span style={{ fontWeight: 700, color: 'var(--primary, #4F46E5)' }}> · {formatDistance(s.distKm)}</span>}
                   {s.slug && <span> · /{s.slug}</span>}
                 </div>
               </div>
@@ -589,6 +595,7 @@ function SearchInner() {
                 key={p.id}
                 product={p}
                 storeDistrict={p.supplierId != null ? districtBySupplier.get(p.supplierId) ?? null : null}
+                storeOnlineOnly={p.supplierId != null ? onlineBySupplier.get(p.supplierId) ?? false : false}
                 isWishlisted={wishlistSet.has(p.id)}
                 stock={inventoryMap.get(p.id) ?? p.stock}
                 onAddToCart={addToCart}

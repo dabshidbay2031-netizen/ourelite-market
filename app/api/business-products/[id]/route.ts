@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { requireClaimOwner } from '@/lib/apiAuth';
+import { pingRealtime } from '@/lib/realtimeServer';
 
 /**
  * PATCH /api/business-products/[id]
@@ -32,6 +33,7 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  pingRealtime(['catalog']);
 
   const row = data as Record<string, unknown>;
   return NextResponse.json({
@@ -63,5 +65,6 @@ export async function DELETE(
     .eq('id', id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  pingRealtime(['catalog']);
   return NextResponse.json({ success: true });
 }

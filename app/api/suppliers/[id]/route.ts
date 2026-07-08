@@ -30,6 +30,7 @@ function mapSupplier(s: Record<string, unknown>) {
     latitude:  (s.latitude  as number | null | undefined) ?? null,
     longitude: (s.longitude as number | null | undefined) ?? null,
     hideStock: Boolean(s.hide_stock ?? false),
+    onlineOnly: Boolean(s.online_only ?? false),
     accountType: (s.account_type as string) ?? 'business',
     /* Trial/approval — absent columns (pre-migration schema) map to null */
     approvalStatus:      (s.approval_status as string | undefined) ?? null,
@@ -114,6 +115,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     }
   }
   if (body.hideStock     !== undefined) updates.hide_stock    = Boolean(body.hideStock);
+  if (body.onlineOnly    !== undefined) updates.online_only   = Boolean(body.onlineOnly);
   if (body.accountType   !== undefined) updates.account_type  = body.accountType;
   // Admin approval decision (see also /request-approval for the user side)
   if (body.approvalStatus !== undefined
@@ -130,7 +132,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // Pre-migration schema: optional columns (slug, latitude, longitude) may
     // not exist yet. Drop them and retry so the rest of the settings still save
     // instead of the whole update failing.
-    const OPTIONAL = ['slug', 'latitude', 'longitude'];
+    const OPTIONAL = ['slug', 'latitude', 'longitude', 'online_only'];
     if (isMissingColumnError(e) && OPTIONAL.some(c => c in updates)) {
       const dropped = OPTIONAL.filter(c => c in updates);
       for (const c of dropped) delete updates[c];

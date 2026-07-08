@@ -485,6 +485,42 @@ ul { list-style: none; }
 .banner p { font-size: .8rem; opacity: .85; margin-bottom: 14px; }
 .banner-emoji { font-size: 4rem; position: relative; z-index: 1; filter: drop-shadow(0 4px 8px rgba(0,0,0,.2)); }
 
+/* ── Photo hero: the uploaded image fills the whole banner, copy overlaid ── */
+.banner-has-photo {
+  min-height: 200px;
+  align-items: flex-end;      /* copy sits at the bottom-left over the photo */
+  justify-content: flex-start;
+  padding: 20px;
+  animation: none;            /* the photo replaces the animated gradient */
+}
+/* Reuse ::before as a left-to-right dark scrim so white copy stays readable
+   over any photo; hide the floating orb (::after) — noise over a real image. */
+.banner-has-photo::before {
+  inset: 0;
+  right: auto; top: auto;
+  width: auto; height: auto;
+  border-radius: 0;
+  background: linear-gradient(90deg, rgba(0,0,0,.66) 0%, rgba(0,0,0,.4) 42%, rgba(0,0,0,.05) 100%);
+  animation: none;
+  z-index: 1;
+}
+.banner-has-photo::after { display: none; }
+.banner-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+}
+.banner-content { position: relative; z-index: 2; max-width: 78%; }
+.banner-has-photo h2 { text-shadow: 0 1px 6px rgba(0,0,0,.35); }
+.banner-has-photo p  { opacity: .95; text-shadow: 0 1px 4px rgba(0,0,0,.35); }
+@media (max-width: 600px) {
+  .banner-has-photo { min-height: 160px; padding: 16px; }
+  .banner-content { max-width: 88%; }
+}
+
 /* ── Stats grid ────────────────────────────────── */
 .stats-grid {
   display: grid;

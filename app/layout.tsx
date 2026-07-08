@@ -32,6 +32,7 @@ import WishlistSync      from '@/components/WishlistSync';
 import ApiAuthInstaller  from '@/components/ApiAuthInstaller';
 import OfflineBanner     from '@/components/OfflineBanner';
 import AiAssistant       from '@/components/AiAssistant';
+import PushManager       from '@/components/PushManager';
 
 // This app is fully dynamic (auth + real-time DB) — never statically pre-render.
 export const dynamic = 'force-dynamic';
@@ -77,6 +78,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <AiAssistant />
               <InstallPrompt />
               <WishlistSync />
+              <PushManager />
             </AppProvider>
           </I18nProvider>
         </CashierProvider>

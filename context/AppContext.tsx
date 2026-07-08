@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useReducer, useCallback, useEffect, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useLiveRefresh } from '@/lib/useLiveRefresh';
+import { useRealtimePing } from '@/lib/useRealtimePing';
 import type { CartItem, Notification, Order, Product, Supplier, Toast, PaymentMethod, PaymentState } from '@/lib/types';
 
 interface InventoryItem { id: number; stock: number; }
@@ -396,13 +397,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } catch { /* ignore */ }
   }, []);
 
-  /* ── Live: keep global catalog, suppliers + alerts fresh without a manual
-     reload (polls while visible + on tab focus; see useLiveRefresh). ── */
+  /* ── Live updates ──────────────────────────────────────────
+     Fast path: server-broadcast realtime pings (lib/realtimeServer.ts) land
+     the instant a mutation commits — no waiting on a poll cycle.
+     Fallback:  a relaxed 45s poll + refetch-on-focus (useLiveRefresh) covers
+     websocket drops, so the app can never go stale even if realtime dies. */
+  useRealtimePing(['catalog'], () => { reloadProducts(); reloadSuppliers(); });
+  useRealtimePing(['notifications'], reloadNotifications);
   useLiveRefresh(() => {
     reloadProducts();
     reloadSuppliers();
     reloadNotifications();
-  }, { intervalMs: 15000 });
+  }, { intervalMs: 45000 });
 
   /* ── Payment ─────────────────────────────────────────────── */
   const setPaymentMethod = useCallback((m: PaymentMethod) => dispatch({ type: 'SET_PAYMENT_METHOD', payload: m }), []);

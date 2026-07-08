@@ -3,6 +3,8 @@ import { getSupabaseAdmin } from '@/lib/supabase';
 import { errMsg, isMissingColumnError } from '@/lib/apiHelpers';
 import { rateLimit, clientIp } from '@/lib/rateLimit';
 import { getAuthUser, isAdminUser, ownsStoreOrAdmin } from '@/lib/apiAuth';
+import { pingRealtime, runAfterResponse } from '@/lib/realtimeServer';
+import { sendPushToStores, sellerStoreIds } from '@/lib/pushNotify';
 
 function mapOrder(o: Record<string, unknown>) {
   return {
@@ -31,6 +33,28 @@ function newOrderId(prefix: 'ORD' | 'BULK'): string {
 }
 
 const VALID_STATUS = new Set(['pending', 'processing', 'shipped', 'completed', 'cancelled', 'refunded', 'bulk_pending']);
+
+/**
+ * Fire the live-update fan-out for a freshly created order — realtime pings
+ * (buyer, selling stores, admin dashboard) and a Web Push to the store
+ * owner(s). Runs after the response so checkout latency is untouched.
+ */
+function notifyNewOrder(orderId: string, userId: string | null, items: OrderItem[], total: number) {
+  runAfterResponse(async () => {
+    const sellers = await sellerStoreIds(items);
+    pingRealtime([
+      'orders',
+      userId ? `user:${userId}` : null,
+      ...sellers.map(s => `store:${s}`),
+    ]);
+    await sendPushToStores(sellers, {
+      title: '🛍️ New order received',
+      body:  `Order ${orderId} — $${total.toFixed(2)}`,
+      url:   `/#/orders/${orderId}`,
+      tag:   `order-${orderId}`,
+    });
+  });
+}
 
 interface OrderItem { id: number; qty: number; }
 
@@ -189,7 +213,9 @@ export async function POST(req: Request) {
         p_notes:          notes,
       });
       if (!error && data) {
-        return NextResponse.json(mapOrder(data as Record<string, unknown>), { status: 201 });
+        const created = data as Record<string, unknown>;
+        notifyNewOrder(String(created.id), userId, items, Number(created.total ?? 0));
+        return NextResponse.json(mapOrder(created), { status: 201 });
       }
       if (error) {
         const code = String(error.code ?? '');
@@ -305,6 +331,7 @@ export async function POST(req: Request) {
       }
     }
 
+    notifyNewOrder(String(order!.id), userId, items, total);
     return NextResponse.json(mapOrder(order!), { status: 201 });
   } catch (e) {
     console.error('[orders POST]', errMsg(e));

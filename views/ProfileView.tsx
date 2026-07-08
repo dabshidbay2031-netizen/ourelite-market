@@ -205,6 +205,7 @@ export default function ProfilePage() {
   const [lng,          setLng]          = useState<number | null>(null);
   const [locating,     setLocating]     = useState(false);
   const [hideStock,    setHideStock]    = useState(false);
+  const [onlineOnly,   setOnlineOnly]   = useState(false);
   const [savingBiz,    setSavingBiz]    = useState(false);
   const [savedBiz,     setSavedBiz]     = useState(false);
 
@@ -273,6 +274,7 @@ export default function ProfilePage() {
       setLat(currentSupplier.latitude  ?? null);
       setLng(currentSupplier.longitude ?? null);
       setHideStock(currentSupplier.hideStock ?? false);
+      setOnlineOnly(currentSupplier.onlineOnly ?? false);
       setBizSlug(currentSupplier.slug ?? '');
       const nums = currentSupplier.contactNumbers ?? [];
       setContacts(nums.length > 0 ? nums : ['']);
@@ -435,6 +437,7 @@ export default function ProfilePage() {
           longitude:      lng,
           slug:           slug || null,
           hideStock,
+          onlineOnly,
         }),
       });
       if (!res.ok) {
@@ -1677,6 +1680,43 @@ export default function ProfilePage() {
                     }}>
                       <div style={{
                         position:'absolute', top:3, left: hideStock ? 19 : 3,
+                        width:16, height:16, borderRadius:'50%', background:'#fff',
+                        transition:'left .2s', boxShadow:'0 1px 3px rgba(0,0,0,.2)',
+                      }} />
+                    </div>
+                  </div>
+                </button>
+
+                {/* Online-only store toggle */}
+                <button
+                  type="button"
+                  onClick={() => setOnlineOnly(o => !o)}
+                  style={{
+                    display:'flex', alignItems:'center', gap:12, width:'100%', marginTop:10,
+                    background: onlineOnly ? 'var(--primary-light, #EEF2FF)' : 'var(--surface)',
+                    border:`1px solid ${onlineOnly ? 'var(--primary)' : 'var(--border)'}`,
+                    borderRadius:10, padding:'12px 14px', cursor:'pointer', textAlign:'left',
+                  }}
+                >
+                  <span style={{ fontSize:20 }}>{onlineOnly ? '🌐' : '🏬'}</span>
+                  <div>
+                    <div style={{ fontWeight:600, fontSize:'.88rem', color:'var(--text)' }}>
+                      {onlineOnly ? 'Online-only store' : 'Physical store'}
+                    </div>
+                    <div style={{ fontSize:'.76rem', color:'var(--text-muted)', marginTop:2 }}>
+                      {onlineOnly
+                        ? 'Shown as “🌐 Online store”; customers get delivery only (no pickup or map)'
+                        : 'Has a shopfront — customers can pick up and see it on the map'}
+                    </div>
+                  </div>
+                  <div style={{ marginLeft:'auto', flexShrink:0 }}>
+                    <div style={{
+                      width:38, height:22, borderRadius:11,
+                      background: onlineOnly ? 'var(--primary)' : '#d1d5db',
+                      position:'relative', transition:'background .2s',
+                    }}>
+                      <div style={{
+                        position:'absolute', top:3, left: onlineOnly ? 19 : 3,
                         width:16, height:16, borderRadius:'50%', background:'#fff',
                         transition:'left .2s', boxShadow:'0 1px 3px rgba(0,0,0,.2)',
                       }} />

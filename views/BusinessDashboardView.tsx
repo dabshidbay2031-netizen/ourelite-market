@@ -6,6 +6,7 @@ import Header from '@/components/Header';
 import ErrorState from '@/components/ErrorState';
 import { useAuth } from '@/context/AuthContext';
 import { useLiveRefresh } from '@/lib/useLiveRefresh';
+import { useRealtimePing } from '@/lib/useRealtimePing';
 import OnlinePaymentsWallet from '@/components/OnlinePaymentsWallet';
 import { CATEGORIES } from '@/lib/data';
 import { isRevenueOrder } from '@/lib/revenue';
@@ -84,8 +85,9 @@ export default function BusinessDashboardView() {
   }, [supplierId]);
 
   useEffect(() => { load(); }, [load]);
-  // Live: refresh silently every 12s + on tab focus.
-  useLiveRefresh(() => load(true), { enabled: supplierId != null });
+  // Live: realtime ping on new orders/claims for this store, poll as fallback.
+  useRealtimePing([supplierId != null ? `store:${supplierId}` : null], () => load(true));
+  useLiveRefresh(() => load(true), { enabled: supplierId != null, intervalMs: 30000 });
 
   /* ── This business's line-item share of any order ── */
   const prodById     = useMemo(() => new Map(products.map(p => [p.id, p])), [products]);

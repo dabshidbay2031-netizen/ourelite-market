@@ -16,8 +16,12 @@ export function roleFor(signedIn: boolean, accountType: AccountType | null): Rol
   return 'customer';
 }
 
-/** Store-operations pages — businesses only. Everything else is shared. */
-const BUSINESS_PREFIXES = ['/dashboard', '/my-dashboard', '/pos', '/inventory', '/customers', '/suppliers', '/admin', '/staff'];
+/** Store-operations pages — businesses only. Everything else is shared.
+ *  NOTE: '/admin' is deliberately NOT here — platform admins are often plain
+ *  (non-business) accounts, and AdminDashboard does its own role gating via
+ *  /api/admin/check. Its Access-Denied page also shows the visitor's UID,
+ *  which the Team → Add Member flow depends on. */
+const BUSINESS_PREFIXES = ['/dashboard', '/my-dashboard', '/pos', '/inventory', '/customers', '/suppliers', '/staff'];
 
 export function isBusinessRoute(path: string): boolean {
   return BUSINESS_PREFIXES.some(p => path === p || path.startsWith(`${p}/`));

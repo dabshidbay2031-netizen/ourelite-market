@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { requireProductOwner } from '@/lib/apiAuth';
 import { isMissingColumnError } from '@/lib/apiHelpers';
+import { pingRealtime } from '@/lib/realtimeServer';
 function mapProduct(p: Record<string, unknown>) {
   const id      = typeof p.id === 'number' ? p.id : parseInt(String(p.id), 10);
   const tags    = Array.isArray(p.tags) ? p.tags as string[] : [];
@@ -87,6 +88,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  pingRealtime(['catalog']);
   return NextResponse.json(mapProduct(data));
 }
 
@@ -108,5 +110,6 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
   }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  pingRealtime(['catalog']);
   return NextResponse.json({ success: true });
 }

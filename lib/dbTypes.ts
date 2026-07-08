@@ -56,6 +56,7 @@ export namespace DB {
     latitude:              number | null;
     longitude:             number | null;
     hide_stock:            boolean;
+    online_only:           boolean;
     account_type:          'business' | 'supplier';
     approval_status:       'trial' | 'pending' | 'approved' | 'rejected';
     trial_started_at:      string;

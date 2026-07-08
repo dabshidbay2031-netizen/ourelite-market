@@ -175,11 +175,16 @@ export default function SupplierProfilePage({ slug }: { slug?: string } = {}) {
 
         <div className="profile-avatar"><StoreAvatar value={supplier.icon} /></div>
         <div className="profile-name">{supplier.name}</div>
-        {supplier.location && (
+        {supplier.onlineOnly ? (
+          <div className="profile-loc" style={{ color: 'var(--primary)' }}><span>🌐</span> Online store · delivery only</div>
+        ) : supplier.location && (
           <div className="profile-loc"><span>📍</span> {supplier.location}</div>
         )}
 
         <div className="profile-badges">
+          {supplier.onlineOnly && (
+            <span className="sup-badge custom" style={{ background: 'var(--primary)', color: '#fff' }}>🌐 Online only</span>
+          )}
           {supplier.verified && (
             <span className="sup-badge verified">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style={{ marginRight:3 }}>
@@ -236,8 +241,8 @@ export default function SupplierProfilePage({ slug }: { slug?: string } = {}) {
         </div>
       )}
 
-      {/* Store location map + route */}
-      {typeof supplier.latitude === 'number' && typeof supplier.longitude === 'number' && (
+      {/* Store location map + route — never for online-only stores */}
+      {!supplier.onlineOnly && typeof supplier.latitude === 'number' && typeof supplier.longitude === 'number' && (
         <div className="profile-section">
           <StoreMap
             lat={supplier.latitude}

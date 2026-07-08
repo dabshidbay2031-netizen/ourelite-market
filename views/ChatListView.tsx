@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from '@/lib/hashRouter';
 import Header from '@/components/Header';
 import { useAuth } from '@/context/AuthContext';
+import { useRealtimePing } from '@/lib/useRealtimePing';
 import type { ChatUser, Message } from '@/lib/types';
 
 interface ConvItem {
@@ -63,6 +64,9 @@ export default function ChatListPage() {
   }, [user]);
 
   useEffect(() => { loadConversations(); }, [loadConversations]);
+  // Live: an incoming message pings this user's topic → list re-sorts/unreads
+  // update instantly (the open room itself streams via postgres_changes).
+  useRealtimePing([user ? `user:${user.id}` : null], loadConversations);
 
   /* ── Not logged in ─── */
   if (!loading && !user) {

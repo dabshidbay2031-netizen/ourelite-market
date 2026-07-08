@@ -6,11 +6,13 @@ import { useApp }  from '@/context/AppContext';
 import type { Supplier, Product, Order } from '@/lib/types';
 import { Link } from '@/lib/hashRouter';
 import { authHeaders } from '@/lib/clientAuth';
+import { getSupabase } from '@/lib/supabase';
 import ProductImage from '@/components/ProductImage';
+import type { HeroBanner } from '@/app/api/settings/hero/route';
 
 /* ── Types ──────────────────────────────────────────────────────────── */
 type AdminRole = 'admin' | 'semi_admin' | null;
-type Tab = 'overview' | 'businesses' | 'products' | 'orders' | 'users' | 'team';
+type Tab = 'overview' | 'businesses' | 'products' | 'orders' | 'users' | 'team' | 'storefront';
 
 interface AdminStats {
   totalBusinesses: number; totalSuppliers: number; totalProducts: number;
@@ -78,6 +80,11 @@ export default function AdminDashboard() {
   const [editProd,   setEditProd]   = useState<Product  | null>(null);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
 
+  // Storefront (hero banner) management
+  const [hero,         setHero]         = useState<HeroBanner | null>(null);
+  const [savingHero,   setSavingHero]   = useState(false);
+  const [uploadingHero,setUploadingHero]= useState(false);
+
   // Team management
   const [showAddAdmin,  setShowAddAdmin]  = useState(false);
   const [newAdminUid,   setNewAdminUid]   = useState('');
@@ -114,6 +121,8 @@ export default function AdminDashboard() {
         const r = await fetch('/api/admin/users', { headers: await authHeaders() }); setUsers(await r.json());
       } else if (t === 'team') {
         const r = await fetch('/api/admin/admins', { headers: await authHeaders() }); setAdmins(await r.json());
+      } else if (t === 'storefront') {
+        const r = await fetch('/api/settings/hero'); setHero(await r.json());
       }
     } catch { /* ignore */ }
     setLoading(false);
@@ -225,6 +234,37 @@ export default function AdminDashboard() {
     else        { toast('Delete failed', 'error'); }
   };
 
+  /* ── Storefront (hero banner) actions ──────────────────────────── */
+  const uploadHeroImage = async (file: File) => {
+    if (!file.type.startsWith('image/')) { toast('Please choose an image file', 'error'); return; }
+    if (file.size > 20 * 1024 * 1024)    { toast('Image must be under 20 MB', 'error'); return; }
+    setUploadingHero(true);
+    try {
+      const sb   = getSupabase();
+      const ext  = file.name.split('.').pop() ?? 'jpg';
+      const path = `hero/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error: upErr } = await sb.storage.from('product-images').upload(path, file, { upsert: false });
+      if (upErr) { toast(`Upload failed: ${upErr.message}`, 'error'); return; }
+      const { data } = sb.storage.from('product-images').getPublicUrl(path);
+      setHero(h => h ? { ...h, imageUrl: data.publicUrl } : h);
+      toast('Image uploaded ✓', 'success');
+    } finally {
+      setUploadingHero(false);
+    }
+  };
+
+  const saveHero = async () => {
+    if (!hero) return;
+    setSavingHero(true);
+    const res = await fetch('/api/settings/hero', {
+      method: 'PUT', headers: await authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(hero),
+    });
+    setSavingHero(false);
+    if (res.ok) { toast('Banner saved ✓', 'success'); setHero(await res.json()); }
+    else        { const e = await res.json().catch(() => ({})); toast(e.error ?? 'Save failed', 'error'); }
+  };
+
   /* ── Team actions ──────────────────────────────────────────────── */
   const addAdmin = async () => {
     if (!newAdminUid.trim()) { toast('Enter a user UID', 'error'); return; }
@@ -268,7 +308,10 @@ export default function AdminDashboard() {
     { key:'products',    label:'📦 Products'    },
     { key:'orders',      label:'🧾 Orders'      },
     { key:'users',       label:'👥 Users'       },
-    ...(isAdmin ? [{ key:'team' as Tab, label:'👑 Team' }] : []),
+    ...(isAdmin ? [
+      { key:'storefront' as Tab, label:'🎨 Storefront' },
+      { key:'team'       as Tab, label:'👑 Team' },
+    ] : []),
   ];
 
   /* ── RENDER ────────────────────────────────────────────────────── */
@@ -652,6 +695,97 @@ export default function AdminDashboard() {
                     </table>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* ── STOREFRONT (admin only) ─────────────────────────── */}
+            {tab === 'storefront' && isAdmin && (
+              <div style={{ maxWidth: 720 }}>
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontWeight: 700, fontSize: '1rem' }}>🎨 Hot Deals Hero Banner</div>
+                  <div style={{ fontSize: '.8rem', color: 'var(--text-muted)' }}>
+                    Change the discount banner image and text shown at the top of the Explore page. Changes go live for all shoppers on save.
+                  </div>
+                </div>
+
+                {!hero ? (
+                  <div style={{ display:'flex', justifyContent:'center', padding:60 }}><div className="spinner" style={{ width:32, height:32 }} /></div>
+                ) : (
+                  <>
+                    {/* Live preview */}
+                    <div className={`banner${hero.imageUrl ? ' banner-has-photo' : ''}`} style={{ margin: '0 0 18px', opacity: hero.enabled ? 1 : 0.5 }}>
+                      {hero.imageUrl && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img className="banner-bg" src={hero.imageUrl} alt="" aria-hidden="true" />
+                      )}
+                      <div className="banner-content">
+                        {hero.tag && <span className="banner-tag">{hero.tag}</span>}
+                        {hero.title && <h2>{hero.title}</h2>}
+                        {hero.subtitle && <p>{hero.subtitle}</p>}
+                        {hero.ctaLabel && <button className="btn btn-secondary btn-sm" type="button">{hero.ctaLabel}</button>}
+                      </div>
+                      {!hero.imageUrl && <span className="banner-emoji">🛍️</span>}
+                    </div>
+
+                    <div style={{ background:'var(--surface)', borderRadius:12, border:'1px solid var(--border)', padding:16 }}>
+                      {/* Image */}
+                      <div className="form-group">
+                        <label className="form-label">Banner Image</label>
+                        <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
+                          {hero.imageUrl && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={hero.imageUrl} alt="Hero" style={{ width:72, height:72, objectFit:'cover', borderRadius:10, border:'1px solid var(--border)' }} />
+                          )}
+                          <label className="btn btn-secondary btn-sm" style={{ cursor:'pointer' }}>
+                            {uploadingHero ? 'Uploading…' : (hero.imageUrl ? '🔄 Replace Image' : '📷 Upload Image')}
+                            <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingHero}
+                              onChange={e => { const f = e.target.files?.[0]; if (f) uploadHeroImage(f); e.target.value=''; }} />
+                          </label>
+                          {hero.imageUrl && (
+                            <button className="btn btn-ghost btn-sm" style={{ color:'var(--danger)' }} type="button"
+                              onClick={() => setHero(h => h ? { ...h, imageUrl: '' } : h)}>Remove</button>
+                          )}
+                        </div>
+                        <p style={{ fontSize:'.72rem', color:'var(--text-muted)', marginTop:6 }}>
+                          The image fills the whole hero with your text overlaid on top. Best with a wide/landscape photo (e.g. 1200×400). Leave empty to show the default 🛍️ emoji. Under 20&nbsp;MB.
+                        </p>
+                      </div>
+
+                      {/* Text fields */}
+                      <div className="form-group">
+                        <label className="form-label">Tag (small pill)</label>
+                        <input className="form-input" value={hero.tag} maxLength={60}
+                          onChange={e => setHero(h => h ? { ...h, tag: e.target.value } : h)} />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Title</label>
+                        <input className="form-input" value={hero.title} maxLength={120}
+                          onChange={e => setHero(h => h ? { ...h, title: e.target.value } : h)} />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Subtitle</label>
+                        <input className="form-input" value={hero.subtitle} maxLength={200}
+                          onChange={e => setHero(h => h ? { ...h, subtitle: e.target.value } : h)} />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Button label</label>
+                        <input className="form-input" value={hero.ctaLabel} maxLength={40}
+                          onChange={e => setHero(h => h ? { ...h, ctaLabel: e.target.value } : h)} />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label" style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer' }}>
+                          <input type="checkbox" checked={hero.enabled} style={{ width:16, height:16 }}
+                            onChange={e => setHero(h => h ? { ...h, enabled: e.target.checked } : h)} />
+                          <span>Show banner on the Explore page</span>
+                        </label>
+                      </div>
+
+                      <button className="btn btn-primary btn-full btn-lg" onClick={saveHero} disabled={savingHero || uploadingHero}>
+                        {savingHero ? 'Saving…' : 'Save Banner'}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 

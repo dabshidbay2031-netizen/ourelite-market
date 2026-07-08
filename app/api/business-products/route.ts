@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { requireStaff, getAuthUser, ownsStoreOrAdmin } from '@/lib/apiAuth';
 import { errMsg, isMissingTableError } from '@/lib/apiHelpers';
+import { pingRealtime } from '@/lib/realtimeServer';
 
 function mapProduct(p: Record<string, unknown>) {
   return {
@@ -120,6 +121,7 @@ export async function POST(req: Request) {
     }
 
     if (error) throw error;
+    pingRealtime(['catalog']); // new claim appears in search/nearby instantly
     return NextResponse.json(mapBP(data as Record<string, unknown>), { status: 201 });
   } catch (e) {
     if (isMissingTableError(e)) {

@@ -78,6 +78,7 @@ export interface Supplier {
   latitude?:      number | null;  // store GPS location (for map + directions)
   longitude?:     number | null;
   hideStock?:     boolean;  // hide stock count from public customers
+  onlineOnly?:    boolean;  // internet-only store — no physical shopfront, no pickup
   accountType?:   'business' | 'supplier';
   /* Trial + approval lifecycle (absent on pre-migration schemas = approved) */
   approvalStatus?:      'trial' | 'pending' | 'approved' | 'rejected' | null;

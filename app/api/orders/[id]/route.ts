@@ -1,6 +1,39 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { getAuthUser } from '@/lib/apiAuth';
+import { pingRealtime, runAfterResponse } from '@/lib/realtimeServer';
+import { sendPushToUsers, sellerStoreIds } from '@/lib/pushNotify';
+
+const STATUS_LABEL: Record<string, string> = {
+  pending:    '🕐 Pending',
+  processing: '📦 Being prepared',
+  shipped:    '🚚 Shipped',
+  completed:  '✅ Completed',
+  cancelled:  '❌ Cancelled',
+  refunded:   '💸 Refunded',
+};
+
+/** Live fan-out after an order changed: pings + push to the buyer. */
+function notifyOrderChanged(order: Record<string, unknown>, newStatus?: string) {
+  runAfterResponse(async () => {
+    const items   = (Array.isArray(order.items) ? order.items : []) as Array<{ id: number }>;
+    const userId  = order.user_id != null ? String(order.user_id) : null;
+    const sellers = await sellerStoreIds(items);
+    pingRealtime([
+      'orders',
+      userId ? `user:${userId}` : null,
+      ...sellers.map(s => `store:${s}`),
+    ]);
+    if (userId && newStatus && newStatus !== 'deleted') {
+      await sendPushToUsers([userId], {
+        title: STATUS_LABEL[newStatus] ?? `Order ${newStatus}`,
+        body:  `Your order ${order.id} is now ${newStatus}.`,
+        url:   `/#/orders/${order.id}`,
+        tag:   `order-${order.id}`,
+      });
+    }
+  });
+}
 
 /**
  * Order management (status change, soft-delete) is a SELLER/admin action.
@@ -83,6 +116,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!data) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+  notifyOrderChanged(data as Record<string, unknown>, typeof body.status === 'string' ? body.status : undefined);
   return NextResponse.json(mapOrder(data as Record<string, unknown>));
 }
 
@@ -106,5 +140,6 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!data) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+  notifyOrderChanged(data as Record<string, unknown>); // ping only — no push for soft-deletes
   return NextResponse.json({ success: true, softDeleted: true, order: mapOrder(data as Record<string, unknown>) });
 }

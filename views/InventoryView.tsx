@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import Header from '@/components/Header';
 import ProductImage from '@/components/ProductImage';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { useMyProductIds, type ClaimRecord } from '@/lib/useMyProductIds';
 import { CATEGORIES } from '@/lib/data';
 
@@ -28,6 +29,7 @@ const emptyForm: ProductForm = {
 
 export default function InventoryPage() {
   const { state, adjustStock, toast, reloadProducts } = useApp();
+  const { currentSupplier } = useAuth();
   const { products, inventory, suppliers, loading } = state;
 
   // A store only manages its OWN products (owned + claimed), never the whole
@@ -233,7 +235,10 @@ export default function InventoryPage() {
       cost: form.cost || '0',
       category: form.category, stock: form.stock,
       sku: form.sku.trim(), description: form.description.trim(),
-      supplierId: form.supplierId ? parseInt(form.supplierId, 10) : null,
+      // Default to the signed-in store: a product created with NO supplier is
+      // an orphan (supplier_id null) that its own creator can't edit/delete
+      // (requireProductOwner treats ownerless rows as admin-only).
+      supplierId: form.supplierId ? parseInt(form.supplierId, 10) : (currentSupplier?.id ?? null),
       barcode: form.barcode.trim() || null,
       imageUrl: form.imageUrls[0] ?? null,
       imageUrls: form.imageUrls,

@@ -44,6 +44,8 @@ function mapSupplier(s: Record<string, unknown>) {
     slug:           (s.slug as string | null | undefined) ?? null,
     latitude:       (s.latitude  as number | null | undefined) ?? null,
     longitude:      (s.longitude as number | null | undefined) ?? null,
+    hideStock:      Boolean(s.hide_stock  ?? false),
+    onlineOnly:     Boolean(s.online_only ?? false),
     accountType:    (s.account_type as string) ?? 'business',
     /* Trial/approval — absent columns (pre-migration schema) map to null */
     approvalStatus:      (s.approval_status as string | undefined) ?? null,
@@ -87,7 +89,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const body = await req.json();
   const { name, authUserId, location, icon, description, categories,
-          discount, deliveryDays, minOrder, badge, verified, accountType } = body;
+          discount, deliveryDays, minOrder, badge, verified, accountType, onlineOnly } = body;
 
   if (!name) {
     return NextResponse.json({ error: 'name is required' }, { status: 400 });
@@ -132,12 +134,14 @@ export async function POST(req: Request) {
     const newSupplier: Record<string, unknown> = { ...baseFields, id: nextId };
     if (autoSlug)   newSupplier.slug = autoSlug;
     if (authUserId) newSupplier.auth_user_id = authUserId;
+    if (onlineOnly) newSupplier.online_only = true;
 
     let { data, error } = await getSupabaseAdmin()
       .from('suppliers').insert(newSupplier).select().single();
-    // Pre-migration schema without a slug column — retry without it
-    if (error && autoSlug && isMissingColumnError(error)) {
+    // Pre-migration schema without a slug / online_only column — retry without them
+    if (error && isMissingColumnError(error)) {
       delete newSupplier.slug;
+      delete newSupplier.online_only;
       ({ data, error } = await getSupabaseAdmin()
         .from('suppliers').insert(newSupplier).select().single());
     }

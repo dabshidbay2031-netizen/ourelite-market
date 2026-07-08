@@ -7,6 +7,7 @@ import { authHeaders } from '@/lib/clientAuth';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
 import { useLiveRefresh } from '@/lib/useLiveRefresh';
+import { useRealtimePing } from '@/lib/useRealtimePing';
 import ErrorState from '@/components/ErrorState';
 
 interface OrderItem { id: number; qty: number; }
@@ -73,8 +74,13 @@ export default function OrdersPage() {
   }, [user, activeTab, currentSupplier]);
 
   useEffect(() => { loadOrders(); }, [loadOrders]);
-  // Live: re-pull silently every 10s + on tab focus, no skeleton flash.
-  useLiveRefresh(() => loadOrders(true), { intervalMs: 10000 });
+  // Live: realtime ping the instant an order lands or changes (my orders via
+  // user topic, my store's via store topic), with a relaxed poll as fallback.
+  useRealtimePing(
+    [user ? `user:${user.id}` : null, currentSupplier ? `store:${currentSupplier.id}` : null],
+    () => loadOrders(true),
+  );
+  useLiveRefresh(() => loadOrders(true), { intervalMs: 30000 });
 
   const handleStatusChange = async (orderId: string, newStatus: string) => {
     setStatusEditing(orderId);

@@ -125,8 +125,13 @@ export default function SuppliersPage() {
                   <div className="supplier-logo"><StoreAvatar value={supplier.icon} /></div>
                   <div className="supplier-info">
                     <div className="supplier-name">{supplier.name}</div>
-                    <div className="supplier-loc"><span>📍</span> {supplier.location}</div>
+                    <div className="supplier-loc">
+                      {supplier.onlineOnly
+                        ? <><span>🌐</span> Online store</>
+                        : <><span>📍</span> {supplier.location}</>}
+                    </div>
                     <div className="supplier-badges">
+                      {supplier.onlineOnly && <span className="sup-badge custom" style={{ background:'var(--primary)', color:'#fff' }}>🌐 Online</span>}
                       {supplier.verified && <span className="sup-badge verified">✓ Verified</span>}
                       <span className="sup-badge custom">{supplier.badge}</span>
                       {supplier.categories.map(c => <span key={c} className="sup-badge custom">{c}</span>)}

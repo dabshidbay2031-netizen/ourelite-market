@@ -2,10 +2,15 @@ import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { requireStaff } from '@/lib/apiAuth';
 import { errMsg, isMissingColumnError, isForeignKeyError, jsonWithEtag } from '@/lib/apiHelpers';
+import { pingRealtime } from '@/lib/realtimeServer';
 
 function mapProduct(p: Record<string, unknown>) {
   const id      = typeof p.id === 'number' ? p.id : parseInt(String(p.id), 10);
-  const tags    = Array.isArray(p.tags) ? p.tags as string[] : [];
+  // Dedupe + trim tags — seeded rows contained ['electronics','electronics'],
+  // which breaks React list keys and double-counts in similarity scoring.
+  const tags    = Array.isArray(p.tags)
+    ? Array.from(new Set((p.tags as string[]).map(t => String(t).trim()).filter(Boolean)))
+    : [];
   const brand   = (p.brand   && String(p.brand).trim())   ? String(p.brand)   : null;
   const barcode = (p.barcode && String(p.barcode).trim())  ? String(p.barcode) : null;
   const subCat  = (p.sub_category && String(p.sub_category).trim()) ? String(p.sub_category) : null;
@@ -164,8 +169,13 @@ export async function POST(req: Request) {
     clothes:'fashion', other:'sports',
   };
 
+  // `cost` (migration_v3_3) may not exist on the live DB. Retry WITHOUT just
+  // that column before collapsing to basicProduct — the old fallback silently
+  // threw away photos/barcode/tags/brand whenever any one column was missing.
+  const { cost: _cost, ...fullNoCost } = fullProduct;
   const attempts = [
     { ...fullProduct,  id: nextId },
+    { ...fullNoCost,   id: nextId },
     { ...basicProduct, id: nextId },
     { ...basicProduct, id: nextId, category: LEGACY_CATS[category] ?? 'electronics' },
   ];
@@ -177,6 +187,7 @@ export async function POST(req: Request) {
         .from('products').insert(attempt).select().single();
       if (error) throw error;
       const result = mapProduct(data as Record<string, unknown>);
+      pingRealtime(['catalog']); // storefronts refresh instantly
       return NextResponse.json({ ...result, category }, { status: 201 });
     } catch (e) {
       lastErr = e;

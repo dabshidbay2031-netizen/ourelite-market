@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { requireProductOwner } from '@/lib/apiAuth';
 import { errMsg } from '@/lib/apiHelpers';
+import { pingRealtime } from '@/lib/realtimeServer';
 
 /**
  * PATCH /api/inventory/[id]
@@ -44,6 +45,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         p_delta:      delta,
       });
       if (!error && typeof data === 'number') {
+        pingRealtime(['catalog']);
         return NextResponse.json({ id, stock: data });
       }
       const code = String((error as Record<string, unknown> | null)?.code ?? '');
@@ -67,6 +69,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       const { error: writeErr } = await sb
         .from('products').update({ stock: newStock }).eq('id', id);
       if (writeErr) throw writeErr;
+      pingRealtime(['catalog']);
       return NextResponse.json({ id, stock: newStock });
     } catch (e) {
       return NextResponse.json({ error: errMsg(e) }, { status: 500 });
@@ -84,6 +87,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       .from('products').update({ stock }).eq('id', id).select('stock').maybeSingle();
     if (error) throw error;
     if (!data) return NextResponse.json({ error: 'Product not found' }, { status: 404 });
+    pingRealtime(['catalog']);
     return NextResponse.json({ id, stock: data.stock });
   } catch (e) {
     return NextResponse.json({ error: errMsg(e) }, { status: 500 });
