@@ -3,6 +3,7 @@
 import { memo, useState, useRef } from 'react';
 import { useRouter } from '@/lib/hashRouter';
 import { getCategoryColor, hexToRgba, discountPct } from '@/lib/data';
+import { reliableImageSrc } from '@/lib/imageFallback';
 import type { Product } from '@/lib/types';
 
 interface Props {
@@ -43,9 +44,9 @@ function ProductCard({
   const bgStyle = { background: hexToRgba(color, 0.12) };
   const pct     = discountPct(product.price, product.originalPrice);
 
-  const allPhotos = product.imageUrls?.length ? product.imageUrls
+  const allPhotos = (product.imageUrls?.length ? product.imageUrls
                   : product.imageUrl          ? [product.imageUrl]
-                  : [];
+                  : []).map(u => reliableImageSrc(u) ?? u);
   // A broken/unreachable photo URL (404, timeout…) otherwise renders as raw
   // alt TEXT instead of falling back to the placeholder icon. Track failures
   // per-slide (by original index) and drop them from the carousel.

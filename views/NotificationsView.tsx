@@ -6,14 +6,6 @@ import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { isPushSupported, subscribeToPush } from '@/lib/push';
 
-const NOTIF_TYPES = [
-  { value: 'stock',    label: '📦 Stock',    icon: '📦' },
-  { value: 'order',    label: '🛍️ Order',    icon: '🛍️' },
-  { value: 'supplier', label: '🚚 Supplier', icon: '🚚' },
-  { value: 'payment',  label: '✅ Payment',  icon: '✅' },
-  { value: 'info',     label: '🔔 Info',     icon: '🔔' },
-];
-
 export default function NotificationsPage() {
   const { state, markAllRead, clearNotifications, toast } = useApp();
   const { user } = useAuth();
@@ -44,11 +36,6 @@ export default function NotificationsPage() {
     }
   };
 
-  const [showForm, setShowForm]   = useState(false);
-  const [nTitle, setNTitle]       = useState('');
-  const [nMessage, setNMessage]   = useState('');
-  const [nType, setNType]         = useState('info');
-  const [saving, setSaving]       = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
   // Local state for immediate delete feedback (actual persistence via API)
@@ -58,26 +45,6 @@ export default function NotificationsPage() {
   if (localNotifs !== notifications && !deletingId) {
     setLocalNotifs(notifications);
   }
-
-  const handleCreate = async () => {
-    if (!nTitle.trim() || !nMessage.trim()) { toast('Title and message required', 'error'); return; }
-    const typeObj = NOTIF_TYPES.find(t => t.value === nType);
-    setSaving(true);
-    const res = await fetch('/api/notifications', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: nType, title: nTitle.trim(), message: nMessage.trim(), icon: typeObj?.icon ?? '🔔' }),
-    });
-    setSaving(false);
-    if (res.ok) {
-      const newNotif = await res.json();
-      setLocalNotifs(prev => [newNotif, ...prev]);
-      toast('Notification created ✓', 'success');
-      setShowForm(false); setNTitle(''); setNMessage(''); setNType('info');
-    } else {
-      toast('Failed to create notification', 'error');
-    }
-  };
 
   const handleDelete = async (id: number) => {
     setDeletingId(id);
@@ -100,7 +67,6 @@ export default function NotificationsPage() {
       <div className="page-title-bar">
         <span className="page-title">🔔 Notifications</span>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-primary btn-sm" onClick={() => setShowForm(v => !v)}>+ New Alert</button>
           {unread > 0 && <button className="btn btn-ghost btn-sm" onClick={markAllRead}>Mark all read</button>}
           {displayed.length > 0 && <button className="btn btn-ghost btn-sm" onClick={() => { clearNotifications(); setLocalNotifs([]); }}>Clear all</button>}
         </div>
@@ -123,32 +89,6 @@ export default function NotificationsPage() {
       {user && pushState === 'denied' && (
         <div style={{ margin:'0 16px 12px', fontSize:'.78rem', color:'var(--text-muted)', padding:'0 2px' }}>
           🔕 Push notifications are blocked — allow notifications for this site in your browser settings to receive order alerts.
-        </div>
-      )}
-
-      {/* Create form */}
-      {showForm && (
-        <div className="notif-create-form">
-          <div className="form-group">
-            <label className="form-label">Type</label>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {NOTIF_TYPES.map(t => (
-                <button key={t.value} className={`chip ${nType === t.value ? 'active' : ''}`} onClick={() => setNType(t.value)}>{t.label}</button>
-              ))}
-            </div>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Title</label>
-            <input className="form-input" placeholder="e.g. Low Stock Alert" value={nTitle} onChange={e => setNTitle(e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Message</label>
-            <textarea className="form-input" rows={2} style={{ resize:'vertical', fontFamily:'inherit' }} placeholder="Notification details…" value={nMessage} onChange={e => setNMessage(e.target.value)} />
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn btn-primary btn-sm" onClick={handleCreate} disabled={saving}>{saving ? 'Creating…' : 'Create Alert'}</button>
-            <button className="btn btn-ghost btn-sm" onClick={() => setShowForm(false)}>Cancel</button>
-          </div>
         </div>
       )}
 

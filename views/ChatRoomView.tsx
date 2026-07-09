@@ -169,7 +169,22 @@ export default function ChatRoomPage() {
             createdAt:      String(m.created_at),
           };
           setMessages(prev => {
+            // Already have the persisted row (e.g. our own POST response landed first).
             if (prev.some(x => x.id === newMsg.id)) return prev;
+            // Our own message echoed back over realtime *before* the POST response
+            // resolved: reconcile it into the optimistic temp copy instead of
+            // appending a duplicate — this is the "double message" the sender saw.
+            const tempIdx = prev.findIndex(x =>
+              x.id.startsWith('temp') &&
+              x.senderId === newMsg.senderId &&
+              (x.content  ?? '') === (newMsg.content  ?? '') &&
+              (x.imageUrl ?? '') === (newMsg.imageUrl ?? '')
+            );
+            if (tempIdx !== -1) {
+              const copy = [...prev];
+              copy[tempIdx] = newMsg;
+              return copy;
+            }
             return [...prev, newMsg];
           });
         }

@@ -8,6 +8,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useCashier } from '@/context/CashierContext';
 import { roleFor } from '@/lib/roles';
 import { cashierCanAccess } from '@/lib/cashierPrivileges';
+import { useChatUnread } from '@/lib/useChatUnread';
 
 export default function BottomNav() {
   const pathname = usePathname();
@@ -19,6 +20,7 @@ export default function BottomNav() {
   const posAllowed = role === 'business' && (!cashier || cashierCanAccess('/pos', cashier.privileges));
   const [mounted, setMounted] = useState(false);
   const notifs = unreadCount();
+  const chatUnread = useChatUnread();
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -55,7 +57,7 @@ export default function BottomNav() {
     {
       href: '/chat',
       label: 'Chat',
-      badge: null as number | null,
+      badge: chatUnread > 0 ? chatUnread : null,
       icon: (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>

@@ -37,6 +37,10 @@ vi.mock('@/context/CashierContext', () => ({
   useCashier: () => ({ cashier: mockCashier, cashierLoading: false, logoutCashier: vi.fn() }),
 }));
 
+// The nav shows a chat-unread badge via this hook, which subscribes to Supabase
+// realtime — irrelevant to role visibility and unavailable in unit tests.
+vi.mock('@/lib/useChatUnread', () => ({ useChatUnread: () => 0 }));
+
 import BottomNav from '@/components/BottomNav';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';

@@ -15,19 +15,37 @@ const DEFAULT_HERO: HeroBanner = {
   ctaLabel: 'Shop Now',
 };
 
+const CACHE_KEY = 'mg_c_hero';
+
+function readCachedHero(): HeroBanner | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    return raw ? (JSON.parse(raw) as HeroBanner) : null;
+  } catch { return null; }
+}
+
 /**
  * Read-only hook for the storefront: fetches the admin-configured Hot Deals
- * hero banner once on mount. Falls back to the default copy on any failure so
- * the Explore page never waits on this request.
+ * hero banner. On refresh it shows the last banner THIS browser actually saw
+ * (cached) instead of the hardcoded default, so the real banner never flashes
+ * a stale/wrong version before the network responds, then revalidates.
  */
 export function useHeroBanner(): HeroBanner {
   const [hero, setHero] = useState<HeroBanner>(DEFAULT_HERO);
 
+  // Swap in the cached banner as early as possible (before the fetch resolves).
+  useEffect(() => { const c = readCachedHero(); if (c) setHero(c); }, []);
+
   const load = useCallback(() => {
     fetch('/api/settings/hero')
       .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (d) setHero(d as HeroBanner); })
-      .catch(() => { /* keep defaults */ });
+      .then(d => {
+        if (d) {
+          setHero(d as HeroBanner);
+          try { localStorage.setItem(CACHE_KEY, JSON.stringify(d)); } catch { /* storage full */ }
+        }
+      })
+      .catch(() => { /* keep last-known / defaults */ });
   }, []);
 
   useEffect(() => { load(); }, [load]);

@@ -9,6 +9,7 @@ import { useCashier } from '@/context/CashierContext';
 import { roleFor, isBusinessRoute } from '@/lib/roles';
 import { cashierCanAccess } from '@/lib/cashierPrivileges';
 import { useIsAdmin } from '@/lib/useIsAdmin';
+import { useChatUnread } from '@/lib/useChatUnread';
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -17,6 +18,7 @@ export default function Sidebar() {
   const { user, accountType, signOut } = useAuth();
   const { cashier, logoutCashier } = useCashier();
   const { isAdmin } = useIsAdmin();
+  const chatUnread = useChatUnread();
 
   async function handleLogout() {
     await signOut();
@@ -122,13 +124,23 @@ export default function Sidebar() {
     ...(user || cashier ? [{
       href: '/chat',
       label: 'Chat',
-      badge: undefined as number | undefined,
+      badge: chatUnread > 0 ? chatUnread : undefined,
       icon: (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
         </svg>
       ),
     }] : []),
+    {
+      href: '/wishlist',
+      label: 'Wishlist',
+      badge: undefined as number | undefined,
+      icon: (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+        </svg>
+      ),
+    },
     {
       href: '/notifications',
       label: 'Alerts',

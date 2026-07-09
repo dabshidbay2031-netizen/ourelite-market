@@ -5,10 +5,21 @@ import { pingRealtime } from '@/lib/realtimeServer';
 
 export async function GET(req: Request) {
   try {
-    const { data, error } = await getSupabaseAdmin()
+    const userId = new URL(req.url).searchParams.get('userId');
+
+    // A user sees global announcements (user_id NULL) plus anything addressed
+    // to them (order updates, etc.). Signed-out callers get globals only.
+    let query = getSupabaseAdmin()
       .from('notifications')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    query = userId
+      ? query.or(`user_id.is.null,user_id.eq.${userId}`)
+      : query.is('user_id', null);
+
+    const { data, error } = await query;
 
     if (error) throw error;
 

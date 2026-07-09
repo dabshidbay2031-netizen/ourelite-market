@@ -547,6 +547,26 @@ ul { list-style: none; }
 .explore-search-wrap { padding: 12px 16px 0; }
 .explore-categories { padding: 12px 16px; }
 
+/* ── District filter (Explore / Search) ──────────── */
+.district-filter { display: flex; align-items: center; gap: 8px; padding: 12px 16px 2px; }
+.district-filter-label {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: .8rem; font-weight: 700; color: var(--text-muted); flex-shrink: 0;
+}
+.district-select {
+  flex: 1; max-width: 280px; min-width: 0;
+  padding: 9px 12px; border-radius: 10px;
+  border: 1.5px solid var(--border); background: var(--surface); color: var(--text);
+  font-size: .85rem; font-weight: 600; font-family: inherit; cursor: pointer;
+}
+.district-select:focus { outline: none; border-color: var(--primary); }
+.district-clear {
+  width: 32px; height: 32px; flex-shrink: 0; border: none; border-radius: 8px;
+  background: var(--bg); color: var(--text-muted); font-size: .9rem; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.district-clear:hover { background: var(--border); color: var(--text); }
+
 /* ══════════════════════════════════════════════════
    POS PAGE
 ══════════════════════════════════════════════════ */
@@ -1206,7 +1226,8 @@ ul { list-style: none; }
   top: calc(var(--header-h) + 12px);
   left: 50%;
   transform: translateX(-50%);
-  z-index: 500;
+  /* Above modals (1500) so toasts fired from inside a modal stay visible. */
+  z-index: 1600;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1592,7 +1613,10 @@ ul { list-style: none; }
    They share a stacking context and the nav renders later in the DOM, so a
    lower/equal z-index would let the nav paint over the modal's bottom action
    buttons (Save / Add Product) on mobile bottom-sheets. */
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 300; display: flex; align-items: flex-end; justify-content: center; animation: mgFadeIn .15s ease; }
+/* z-index 1500 keeps modals above the floating AI button (1400) and any Leaflet
+   map controls (up to 1000) — otherwise those paint over the modal and steal the
+   touch events, which made tall modals (e.g. Bulk Order) feel un-scrollable. */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 1500; display: flex; align-items: flex-end; justify-content: center; animation: mgFadeIn .15s ease; }
 .modal-box { background: var(--surface); border-radius: var(--radius-lg) var(--radius-lg) 0 0; width: 100%; max-width: 600px; max-height: 92dvh; overflow-y: auto; animation: mgSlideUp .2s ease; }
 .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 14px; font-weight: 700; font-size: .95rem; border-bottom: 1px solid var(--border-light); position: sticky; top: 0; background: var(--surface); z-index: 1; }
 .modal-close { width: 30px; height: 30px; border-radius: 8px; background: var(--bg); color: var(--text-muted); font-size: 1rem; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer; }
@@ -3501,10 +3525,19 @@ ul { list-style: none; }
   overflow: hidden;
   border: 1px solid var(--border-light);
   background: var(--surface);
+  /* Confine Leaflet's internal stacking (panes + the .leaflet-top/.leaflet-bottom
+     control containers, which sit at z-index 1000) to this box so they can never
+     paint over a modal, the cart drawer, or any other overlay. */
+  isolation: isolate;
 }
 .store-map-canvas { width: 100%; height: 100%; }
-/* Leaflet sometimes needs an explicit z so its panes sit below app modals */
+/* Belt-and-suspenders: pin every Leaflet layer low. The control *containers*
+   (.leaflet-top / .leaflet-bottom) default to z-index 1000 — the earlier rule
+   only covered .leaflet-control, so the zoom buttons + attribution still bled
+   through on top of modals. */
 .store-map-canvas .leaflet-pane,
+.store-map-canvas .leaflet-top,
+.store-map-canvas .leaflet-bottom,
 .store-map-canvas .leaflet-control { z-index: 1 !important; }
 .store-map-overlay {
   position: absolute; inset: 0; z-index: 2;
@@ -3732,8 +3765,23 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   font-weight: 700; font-size: .82rem; margin-bottom: 14px;
   color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em;
 }
-/* Sign-out button on the profile hero (colored background) — white text */
-.signout-btn, .signout-btn:hover { color: #fff !important; border-color: rgba(255,255,255,.5); }
+/* Sign-out button on the colored profile hero — white text for contrast */
+.biz-hero-card .signout-btn,
+.biz-hero-card .signout-btn:hover { color: #fff !important; border-color: rgba(255,255,255,.5); }
+
+/* Sign-out button on a plain title bar (customer & supplier profiles) sits on
+   the light page background — force a readable danger style so it's not white
+   text on white. */
+.page-title-bar .signout-btn {
+  color: var(--danger) !important;
+  border: 1px solid var(--border) !important;
+  background: var(--surface);
+}
+.page-title-bar .signout-btn:hover {
+  color: #fff !important;
+  background: var(--danger);
+  border-color: var(--danger) !important;
+}
 
 /* Legal pages (privacy / terms) */
 .legal-wrap { max-width: 760px; margin: 0 auto; padding: 16px 18px 100px; }

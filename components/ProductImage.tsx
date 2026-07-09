@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type CSSProperties } from 'react';
+import { reliableImageSrc } from '@/lib/imageFallback';
 
 interface Props {
   icon?:      string;
@@ -23,7 +24,7 @@ function Placeholder({ className, style }: Pick<Props, 'className' | 'style'>) {
 }
 
 export default function ProductImage({ imageUrl, imageUrls, name, className, style }: Props) {
-  const src = imageUrls?.[0] ?? imageUrl ?? null;
+  const src = reliableImageSrc(imageUrls?.[0] ?? imageUrl ?? null);
   // A broken/unreachable URL (404, timeout, CORS…) otherwise renders as raw alt
   // TEXT in place of the photo — track load failure and fall back to the SVG
   // placeholder instead. Reset per src so switching products retries the new URL.

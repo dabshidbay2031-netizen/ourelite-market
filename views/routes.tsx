@@ -40,6 +40,7 @@ export const ROUTES: RouteDef[] = [
   { pattern: '/chat/:id',      component: lazy(() => import('@/views/ChatRoomView')) },
   { pattern: '/notifications', component: lazy(() => import('@/views/NotificationsView')) },
   { pattern: '/search',        component: lazy(() => import('@/views/SearchView')) },
+  { pattern: '/wishlist',      component: lazy(() => import('@/views/WishlistView')) },
   { pattern: '/product/:id',   component: lazy(() => import('@/views/ProductDetailView')) },
   { pattern: '/admin',          component: lazy(() => import('@/views/AdminView')) },
   { pattern: '/staff',          component: lazy(() => import('@/views/StaffView')) },

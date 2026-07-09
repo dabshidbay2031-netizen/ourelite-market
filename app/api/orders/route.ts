@@ -5,6 +5,7 @@ import { rateLimit, clientIp } from '@/lib/rateLimit';
 import { getAuthUser, isAdminUser, ownsStoreOrAdmin } from '@/lib/apiAuth';
 import { pingRealtime, runAfterResponse } from '@/lib/realtimeServer';
 import { sendPushToStores, sellerStoreIds } from '@/lib/pushNotify';
+import { createNotifications } from '@/lib/notify';
 
 function mapOrder(o: Record<string, unknown>) {
   return {
@@ -42,8 +43,38 @@ const VALID_STATUS = new Set(['pending', 'processing', 'shipped', 'completed', '
 function notifyNewOrder(orderId: string, userId: string | null, items: OrderItem[], total: number) {
   runAfterResponse(async () => {
     const sellers = await sellerStoreIds(items);
+
+    // In-app notifications (Notifications page + bell badge): one for the buyer,
+    // one for each selling store's owner. Look up owners from the store rows.
+    let ownerIds: string[] = [];
+    try {
+      if (sellers.length) {
+        const { data } = await getSupabaseAdmin()
+          .from('suppliers')
+          .select('auth_user_id')
+          .in('id', sellers);
+        ownerIds = (data ?? [])
+          .map(s => s.auth_user_id as string | null)
+          .filter((v): v is string => !!v && v !== userId);
+      }
+    } catch { /* owners are best-effort */ }
+
+    await createNotifications([
+      ...(userId ? [{
+        userId, type: 'order', icon: '🛍️',
+        title:   'Order placed',
+        message: `Your order ${orderId} for $${total.toFixed(2)} was placed.`,
+      }] : []),
+      ...ownerIds.map(owner => ({
+        userId: owner, type: 'order', icon: '🛍️',
+        title:   'New order received',
+        message: `Order ${orderId} — $${total.toFixed(2)}`,
+      })),
+    ]);
+
     pingRealtime([
       'orders',
+      'notifications',
       userId ? `user:${userId}` : null,
       ...sellers.map(s => `store:${s}`),
     ]);

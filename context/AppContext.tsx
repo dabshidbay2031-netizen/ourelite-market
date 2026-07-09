@@ -151,9 +151,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // The signed-in seller's own store id, if any. A business/supplier must not
   // be able to buy products their own store sells (self-purchase). Held in a
   // ref so addToCart can read it without widening its dependency list.
-  const { currentSupplier } = useAuth();
+  const { currentSupplier, user } = useAuth();
   const ownStoreIdRef = useRef<number | null>(null);
   ownStoreIdRef.current = currentSupplier?.id ?? null;
+
+  // Notifications are user-scoped (order updates addressed to this user) plus
+  // global announcements. Held in a ref so the [] deps loaders read the current
+  // id without re-subscribing.
+  const userIdRef = useRef<string | null>(null);
+  userIdRef.current = user?.id ?? null;
+  const notifUrl = () => userIdRef.current
+    ? `/api/notifications?userId=${encodeURIComponent(userIdRef.current)}`
+    : '/api/notifications';
 
   /* ── Load data: serve cache instantly, fetch fresh in background ── */
   useEffect(() => {
@@ -187,7 +196,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const [products, suppliers, notifications] = await Promise.all([
           fetchIfChanged('/api/products',      ctrl.signal),
           fetchIfChanged('/api/suppliers',     ctrl.signal),
-          fetchIfChanged('/api/notifications', ctrl.signal),
+          fetchIfChanged(notifUrl(),           ctrl.signal),
         ]);
         clearTimeout(timeout);
 
@@ -389,13 +398,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const reloadNotifications = useCallback(async () => {
     try {
-      const data = await fetchIfChanged('/api/notifications');
+      const data = await fetchIfChanged(notifUrl());
       if (Array.isArray(data)) {
         dispatch({ type: 'SET_NOTIFICATIONS', payload: data });
         writeCache(CACHE.notifications, data);
       }
     } catch { /* ignore */ }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-scope notifications whenever the signed-in user changes (login/logout).
+  useEffect(() => { reloadNotifications(); }, [user?.id, reloadNotifications]);
 
   /* ── Live updates ──────────────────────────────────────────
      Fast path: server-broadcast realtime pings (lib/realtimeServer.ts) land

@@ -1135,7 +1135,7 @@ export default function ProfilePage() {
           </div>
 
           <div className="user-stats-row">
-            <div className="user-stat-chip"><span className="user-stat-val">{wishlistCount}</span><span className="user-stat-lbl">Wishlist</span></div>
+            <div className="user-stat-chip" style={{ cursor:'pointer' }} onClick={() => router.push('/wishlist')}><span className="user-stat-val">{wishlistCount}</span><span className="user-stat-lbl">Wishlist</span></div>
             <div className="user-stat-chip"><span className="user-stat-val">{cartItemCount}</span><span className="user-stat-lbl">In Cart</span></div>
             <div className="user-stat-chip" style={{ cursor:'pointer' }} onClick={() => router.push('/orders')}>
               <span className="user-stat-val">📋</span><span className="user-stat-lbl">Orders</span>
@@ -1146,8 +1146,12 @@ export default function ProfilePage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Profile Photo URL</label>
-            <input className="form-input" placeholder="https://…/photo.jpg" value={avatarUrl} onChange={e => setAvatarUrl(e.target.value)} />
+            <label className="form-label">Profile Photo</label>
+            <ProductImageUpload
+              urls={avatarUrl ? [avatarUrl] : []}
+              onChange={urls => setAvatarUrl(urls[0] ?? '')}
+              maxPhotos={1}
+            />
           </div>
           <div className="form-group">
             <label className="form-label">Full Name</label>

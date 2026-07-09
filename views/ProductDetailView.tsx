@@ -7,6 +7,7 @@ import { useAuth } from '@/context/AuthContext';
 import { getCategoryColor, hexToRgba, discountPct, SUBCATEGORIES } from '@/lib/data';
 import { CATEGORIES } from '@/lib/data';
 import ProductImage from '@/components/ProductImage';
+import { reliableImageSrc } from '@/lib/imageFallback';
 import { useClaimProduct } from '@/lib/useClaimProduct';
 import { similarProducts } from '@/lib/similarity';
 
@@ -128,7 +129,7 @@ export default function ProductDetailPage() {
   const pct          = discountPct(product.price, product.originalPrice);
   const photos       = (product.imageUrls?.length ? product.imageUrls
                      : product.imageUrl          ? [product.imageUrl]
-                     : []).filter(url => !failedPhotos.has(url));
+                     : []).map(u => reliableImageSrc(u) ?? u).filter(url => !failedPhotos.has(url));
   const hasPhotos    = photos.length > 0;
   const markFailed   = (url: string) => setFailedPhotos(s => new Set(s).add(url));
   if (photoIdx >= photos.length && photos.length > 0) setPhotoIdx(0);

@@ -11,7 +11,7 @@ import { CATEGORIES, SUBCATEGORIES } from '@/lib/data';
 import { useClaimProduct } from '@/lib/useClaimProduct';
 import { useIncrementalList } from '@/lib/useIncrementalList';
 import { useHeroBanner } from '@/lib/useHeroBanner';
-import { districtFor } from '@/lib/districts';
+import { districtFor, MOGADISHU_DISTRICTS } from '@/lib/districts';
 
 export default function ExplorePage() {
   const router = useRouter();
@@ -23,6 +23,7 @@ export default function ExplorePage() {
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
   const [activeSub, setActiveSub] = useState('all');
+  const [activeDistrict, setActiveDistrict] = useState('all');
 
   // Subcategories for the selected category (only shown once a category is picked)
   const subCats = activeCategory !== 'all' ? (SUBCATEGORIES[activeCategory] ?? []) : [];
@@ -45,11 +46,32 @@ export default function ExplorePage() {
     new Map(state.suppliers.map(s => [s.id, !!s.onlineOnly])),
   [state.suppliers]);
 
+  // Recognised Mogadishu district per store (GPS only, no free-text fallback) —
+  // powers the district filter so "Hodan" matches only stores actually in Hodan.
+  const recognizedDistrictBySupplier = useMemo(() =>
+    new Map(state.suppliers.map(s => [s.id, districtFor(s.latitude, s.longitude)])),
+  [state.suppliers]);
+
+  // Only offer districts that actually have products, so the picker never
+  // shows an option that resolves to an empty grid.
+  const availableDistricts = useMemo(() => {
+    const present = new Set<string>();
+    for (const p of products) {
+      const d = p.supplierId != null ? recognizedDistrictBySupplier.get(p.supplierId) : null;
+      if (d) present.add(d);
+    }
+    return MOGADISHU_DISTRICTS.filter(d => present.has(d.name))
+      .map(d => d.name)
+      .sort((a, b) => a.localeCompare(b));
+  }, [products, recognizedDistrictBySupplier]);
+
   const filtered = useMemo(() => {
     // Filter out B2B-only products for non-business/supplier users
     let list = products.filter(p => !p.isB2b || accountType === 'business' || accountType === 'supplier');
     if (activeCategory !== 'all') list = list.filter(p => p.category === activeCategory);
     if (activeSub !== 'all')      list = list.filter(p => p.subCategory === activeSub);
+    if (activeDistrict !== 'all') list = list.filter(p =>
+      p.supplierId != null && recognizedDistrictBySupplier.get(p.supplierId) === activeDistrict);
     if (search.trim()) {
       const q = search.toLowerCase();
       // Match the subcategory's display NAME too (e.g. searching "laptops")
@@ -66,7 +88,7 @@ export default function ExplorePage() {
       );
     }
     return list;
-  }, [products, search, activeCategory, activeSub, accountType]);
+  }, [products, search, activeCategory, activeSub, activeDistrict, recognizedDistrictBySupplier, accountType]);
 
   const bestSellers = useMemo(() =>
     [...products].sort((a, b) => b.sold - a.sold).slice(0, 8),
@@ -74,14 +96,17 @@ export default function ExplorePage() {
 
   // Render the grid in slices — mounting all 600+ cards at once froze first paint
   const { visible, hasMore, sentinelRef } =
-    useIncrementalList(filtered, `${search}|${activeCategory}|${activeSub}`);
+    useIncrementalList(filtered, `${search}|${activeCategory}|${activeSub}|${activeDistrict}`);
 
   return (
     <div className="page-anim">
-      <Header searchQuery={search} onSearch={setSearch} />
+      {/* The Explore header search hands off to the dedicated Search page
+          (better results: stores, nearby offers, barcode) instead of the
+          simple in-place filter. */}
+      <Header searchQuery={search} onSearch={setSearch} onSearchFocus={() => router.push('/search')} />
 
       {/* Hot Deals Banner — copy & image configurable by admins (Admin → Storefront) */}
-      {!search && activeCategory === 'all' && hero.enabled && (
+      {!search && activeCategory === 'all' && activeDistrict === 'all' && hero.enabled && (
         <div className={`banner${hero.imageUrl ? ' banner-has-photo' : ''}`}>
           {hero.imageUrl && (
             // Full-bleed hero photo behind the copy (aria-hidden — decorative)
@@ -101,6 +126,30 @@ export default function ExplorePage() {
           {!hero.imageUrl && <span className="banner-emoji">🛍️</span>}
         </div>
       )}
+
+      {/* District filter — browse products by Mogadishu district */}
+      <div className="district-filter">
+        <span className="district-filter-label">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+          </svg>
+          District
+        </span>
+        <select
+          className="district-select"
+          value={activeDistrict}
+          onChange={e => setActiveDistrict(e.target.value)}
+          aria-label="Filter products by Mogadishu district"
+        >
+          <option value="all">All Mogadishu</option>
+          {availableDistricts.map(name => (
+            <option key={name} value={name}>{name}</option>
+          ))}
+        </select>
+        {activeDistrict !== 'all' && (
+          <button className="district-clear" onClick={() => setActiveDistrict('all')} aria-label="Clear district filter">✕</button>
+        )}
+      </div>
 
       {/* Category chips */}
       <div className="explore-categories">
@@ -145,7 +194,7 @@ export default function ExplorePage() {
       </div>
 
       {/* Best Sellers */}
-      {!search && activeCategory === 'all' && bestSellers.length > 0 && (
+      {!search && activeCategory === 'all' && activeDistrict === 'all' && bestSellers.length > 0 && (
         <>
           <div className="section-header">
             <span className="section-title">🏆 Best Sellers</span>
@@ -179,6 +228,9 @@ export default function ExplorePage() {
             : activeCategory === 'all'
               ? '🛒 All Products'
               : CATEGORIES.find(c => c.id === activeCategory)?.name}
+          {activeDistrict !== 'all' && (
+            <span style={{ color: 'var(--primary)', fontWeight: 700 }}> · 📍 {activeDistrict}</span>
+          )}
         </span>
         <span className="text-muted text-sm">{filtered.length} items</span>
       </div>

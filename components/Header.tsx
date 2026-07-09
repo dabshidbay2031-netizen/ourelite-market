@@ -14,6 +14,9 @@ interface HeaderProps {
   searchQuery?: string;
   onSearch?: (q: string) => void;
   showSearch?: boolean;
+  /** When set, focusing/tapping the search box runs this instead of typing
+   *  in place — used to hand off to the full Search page. */
+  onSearchFocus?: () => void;
 }
 
 /* Navs pulled out of the bottom bar into the mobile menu drawer */
@@ -70,6 +73,15 @@ const MENU_LINKS = [
     ),
   },
   {
+    href: '/wishlist',
+    label: 'Wishlist',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+      </svg>
+    ),
+  },
+  {
     href: '/settings',
     label: 'Settings',
     icon: (
@@ -81,7 +93,7 @@ const MENU_LINKS = [
   },
 ];
 
-export default function Header({ searchQuery = '', onSearch, showSearch = true }: HeaderProps) {
+export default function Header({ searchQuery = '', onSearch, showSearch = true, onSearchFocus }: HeaderProps) {
   const { unreadCount, cartCount, setCartOpen } = useApp();
   const { user, accountType, signOut } = useAuth();
   const { cashier, logoutCashier } = useCashier();
@@ -190,7 +202,7 @@ export default function Header({ searchQuery = '', onSearch, showSearch = true }
         </Link>
 
         {showSearch && (
-          <div className="header-search">
+          <div className="header-search" onClick={onSearchFocus}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
             </svg>
@@ -199,6 +211,8 @@ export default function Header({ searchQuery = '', onSearch, showSearch = true }
               placeholder="Search products…"
               value={searchQuery}
               onChange={e => onSearch?.(e.target.value)}
+              onFocus={onSearchFocus}
+              readOnly={!!onSearchFocus}
             />
           </div>
         )}

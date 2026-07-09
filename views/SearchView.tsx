@@ -11,7 +11,7 @@ import { useClaimProduct } from '@/lib/useClaimProduct';
 import { useIncrementalList } from '@/lib/useIncrementalList';
 import { useLiveLocation } from '@/lib/useLiveLocation';
 import { formatDistance, distanceKm } from '@/lib/geo';
-import { districtFor } from '@/lib/districts';
+import { districtFor, MOGADISHU_DISTRICTS } from '@/lib/districts';
 import StoreAvatar from '@/components/StoreAvatar';
 import type { Product } from '@/lib/types';
 
@@ -241,9 +241,26 @@ function SearchInner() {
     new Map(state.suppliers.map(s => [s.id, !!s.onlineOnly])),
   [state.suppliers]);
 
+  // Recognised district per store (GPS only) → powers the district filter.
+  const recognizedDistrictBySupplier = useMemo(() =>
+    new Map(state.suppliers.map(s => [s.id, districtFor(s.latitude, s.longitude)])),
+  [state.suppliers]);
+
+  const availableDistricts = useMemo(() => {
+    const present = new Set<string>();
+    for (const p of products) {
+      const d = p.supplierId != null ? recognizedDistrictBySupplier.get(p.supplierId) : null;
+      if (d) present.add(d);
+    }
+    return MOGADISHU_DISTRICTS.filter(d => present.has(d.name))
+      .map(d => d.name)
+      .sort((a, b) => a.localeCompare(b));
+  }, [products, recognizedDistrictBySupplier]);
+
   const [query,           setQuery]           = useState(searchParams.get('q') ?? '');
   const [activeCategory,  setActiveCategory]  = useState('all');
   const [activeSubCat,    setActiveSubCat]    = useState('all');
+  const [activeDistrict,  setActiveDistrict]  = useState('all');
   const [showScanner,     setShowScanner]     = useState(false);
   const [scanLoading,     setScanLoading]     = useState(false);
   const [scannedBarcode,  setScannedBarcode]  = useState('');
@@ -260,6 +277,8 @@ function SearchInner() {
     let list = products;
     if (activeCategory !== 'all') list = list.filter(p => p.category === activeCategory);
     if (activeSubCat  !== 'all') list = list.filter(p => p.subCategory === activeSubCat);
+    if (activeDistrict !== 'all') list = list.filter(p =>
+      p.supplierId != null && recognizedDistrictBySupplier.get(p.supplierId) === activeDistrict);
     if (query.trim()) {
       const q = query.toLowerCase();
       list = list.filter(p =>
@@ -272,11 +291,11 @@ function SearchInner() {
       );
     }
     return list;
-  }, [products, query, activeCategory, activeSubCat]);
+  }, [products, query, activeCategory, activeSubCat, activeDistrict, recognizedDistrictBySupplier]);
 
   // Render the grid in slices — mounting all 600+ cards at once froze first paint
   const { visible, hasMore, sentinelRef } =
-    useIncrementalList(filtered, `${query}|${activeCategory}|${activeSubCat}`);
+    useIncrementalList(filtered, `${query}|${activeCategory}|${activeSubCat}|${activeDistrict}`);
 
   /* ── Nearby offers: live location + distance-ranked stores ──────────────
      Every store selling a matching product (uploader AND claimers) becomes a
@@ -417,6 +436,32 @@ function SearchInner() {
         </div>
       )}
 
+      {/* ── District filter ── */}
+      {availableDistricts.length > 0 && (
+        <div className="district-filter" style={{ background: 'var(--surface)' }}>
+          <span className="district-filter-label">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+            </svg>
+            District
+          </span>
+          <select
+            className="district-select"
+            value={activeDistrict}
+            onChange={e => setActiveDistrict(e.target.value)}
+            aria-label="Filter products by Mogadishu district"
+          >
+            <option value="all">All Mogadishu</option>
+            {availableDistricts.map(name => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+          {activeDistrict !== 'all' && (
+            <button className="district-clear" onClick={() => setActiveDistrict('all')} aria-label="Clear district filter">✕</button>
+          )}
+        </div>
+      )}
+
       {/* ── Category chips ── */}
       <div className="chips-row" style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
         <button className={`chip ${activeCategory === 'all' ? 'active' : ''}`} onClick={() => { setActiveCategory('all'); setActiveSubCat('all'); }}>All</button>
@@ -448,11 +493,11 @@ function SearchInner() {
       )}
 
       {/* ── Results count ── */}
-      {!loading && (query || activeCategory !== 'all') && (
+      {!loading && (query || activeCategory !== 'all' || activeDistrict !== 'all') && (
         <div className="search-results-count">
           {filtered.length === 0
             ? 'No results'
-            : `${filtered.length} result${filtered.length !== 1 ? 's' : ''}${query ? ` for "${query}"` : ''}`}
+            : `${filtered.length} result${filtered.length !== 1 ? 's' : ''}${query ? ` for "${query}"` : ''}${activeDistrict !== 'all' ? ` · 📍 ${activeDistrict}` : ''}`}
         </div>
       )}
 

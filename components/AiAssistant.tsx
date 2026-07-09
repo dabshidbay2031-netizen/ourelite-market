@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { usePathname } from '@/lib/hashRouter';
 
 interface Msg { role: 'user' | 'assistant'; content: string }
 
@@ -19,6 +20,12 @@ export default function AiAssistant() {
   const [input, setInput]     = useState('');
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const pathname  = usePathname();
+
+  // Inside a chat room the floating button sits on top of the message send
+  // button (both bottom-right), so hide the assistant there. Chat has its own
+  // in-thread help; the assistant stays available on every other screen.
+  const inChatRoom = pathname.startsWith('/chat/');
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -47,6 +54,8 @@ export default function AiAssistant() {
     }
     setLoading(false);
   };
+
+  if (inChatRoom) return null;
 
   return (
     <>

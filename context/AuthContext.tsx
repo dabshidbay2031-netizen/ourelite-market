@@ -28,6 +28,25 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+/* ── Account-type cache ──────────────────────────────────────────────
+   Resolving the account type needs a network round-trip. Caching the last
+   resolved type per uid lets a refresh render the correct audience (business
+   vs customer nav, dashboards) *immediately* instead of flashing the default
+   'customer' role for a second while the fetch runs. */
+const ACCOUNT_CACHE = 'mg_c_account';
+function readCachedAccount(): { uid: string; accountType: AccountType } | null {
+  try {
+    const raw = localStorage.getItem(ACCOUNT_CACHE);
+    return raw ? (JSON.parse(raw) as { uid: string; accountType: AccountType }) : null;
+  } catch { return null; }
+}
+function writeCachedAccount(uid: string, accountType: AccountType) {
+  try { localStorage.setItem(ACCOUNT_CACHE, JSON.stringify({ uid, accountType })); } catch { /* storage full */ }
+}
+function clearCachedAccount() {
+  try { localStorage.removeItem(ACCOUNT_CACHE); } catch { /* ignore */ }
+}
+
 /* ── Mapper ──────────────────────────────────────────────────────── */
 function toSupabaseUser(sb: SbUser): AuthUser {
   return {
@@ -72,13 +91,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setCurrentProfile(null);
         const t = sup.accountType === 'supplier' ? 'supplier' : sup.accountType === 'agent' ? 'agent' : 'business';
         applyAccountType(t as AccountType);
+        writeCachedAccount(uid, t as AccountType);
         return;
       }
     } catch { /* ignore */ }
     try {
       const res  = await fetch(`/api/profile?userId=${encodeURIComponent(uid)}`);
       const data = await res.json();
-      if (data?.id) { setCurrentProfile(data); setCurrentSupplier(null); applyAccountType('user'); return; }
+      if (data?.id) { setCurrentProfile(data); setCurrentSupplier(null); applyAccountType('user'); writeCachedAccount(uid, 'user'); return; }
     } catch { /* ignore */ }
 
     // No profile or supplier found — auto-create a profile so the user is
@@ -100,12 +120,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setCurrentProfile(profile);
           setCurrentSupplier(null);
           applyAccountType('user');
+          writeCachedAccount(uid, 'user');
           return;
         }
       } catch { /* ignore — fall through to null state */ }
     }
 
     setCurrentSupplier(null); setCurrentProfile(null); applyAccountType(null);
+    clearCachedAccount();
   }
 
   /* ── Apply the current Supabase session ───────────────────────── */
@@ -119,12 +141,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     if (effective) {
+      // Optimistic role from the last resolved value for this uid → nav and
+      // role-gated views render the right audience at once, then resolveAccount
+      // confirms/corrects it. Only when we don't already have a type.
+      if (!accountTypeRef.current) {
+        const cached = readCachedAccount();
+        if (cached && cached.uid === effective.id) applyAccountType(cached.accountType);
+      }
       resolveAccount(effective.id, sbUser ?? undefined);
     } else {
       lastResolvedUid.current = null;
       setCurrentSupplier(null);
       setCurrentProfile(null);
       applyAccountType(null);
+      clearCachedAccount();
     }
     setLoading(false);
   }
@@ -162,6 +192,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Clear local state immediately so the UI reflects the sign-out at once
     lastResolvedUid.current = null;
     setUser(null); setCurrentSupplier(null); setCurrentProfile(null); applyAccountType(null);
+    clearCachedAccount();
     try {
       await getSupabase().auth.signOut();
     } catch (e) {

@@ -48,6 +48,10 @@ export const viewport: Viewport = {
   width:        'device-width',
   initialScale: 1,
   maximumScale: 1,
+  // Draw under the iOS status bar / home indicator so env(safe-area-inset-*)
+  // returns real values — the nav and page bottom padding depend on it, else
+  // form submit buttons hide behind the home indicator in the installed app.
+  viewportFit:  'cover',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
