@@ -5,6 +5,8 @@ import { Link } from '@/lib/hashRouter';
 import Header from '@/components/Header';
 import ErrorState from '@/components/ErrorState';
 import { useAuth } from '@/context/AuthContext';
+import { useApp } from '@/context/AppContext';
+import { authHeaders } from '@/lib/clientAuth';
 import { useLiveRefresh } from '@/lib/useLiveRefresh';
 import { useRealtimePing } from '@/lib/useRealtimePing';
 import OnlinePaymentsWallet from '@/components/OnlinePaymentsWallet';
@@ -37,10 +39,11 @@ const SVG_W = 300, SVG_H = 84;
 
 export default function BusinessDashboardView() {
   const { currentSupplier, loading: authLoading } = useAuth();
+  const { state } = useApp();
   const supplierId = currentSupplier?.id ?? null;
 
   /* ── This business's own products + orders ── */
-  const [products,   setProducts]   = useState<Product[]>([]);
+  const [claimedProducts, setClaimedProducts] = useState<Product[]>([]);
   const [realOrders, setRealOrders] = useState<Order[]>([]);
   const [loaded,     setLoaded]     = useState(false);
   const [error,      setError]      = useState(false);
@@ -49,12 +52,13 @@ export default function BusinessDashboardView() {
     if (supplierId == null) return;
     if (!silent) setLoaded(false);
     try {
-      // This business's products come from its business_products CLAIMS:
-      // the catalog item is owned by the wholesale supplier, while price +
-      // stock are this store's own (custom_price / stock_qty).
+      // Claimed products: catalog rows this store sources from a wholesaler,
+      // at ITS OWN price/stock (custom_price / stock_qty). Owned catalog rows
+      // are merged in below from the global product list.
+      // The orders endpoint carries customer PII → needs the caller's JWT.
       const [bpRes, oRes] = await Promise.all([
         fetch(`/api/business-products?supplierId=${supplierId}`, { cache: 'no-store' }),
-        fetch(`/api/orders?supplierId=${supplierId}`, { cache: 'no-store' }),
+        fetch(`/api/orders?supplierId=${supplierId}`, { cache: 'no-store', headers: await authHeaders() }),
       ]);
       if (!bpRes.ok || !oRes.ok) throw new Error('request failed');
       const [bp, o] = await Promise.all([bpRes.json(), oRes.json()]);
@@ -72,7 +76,7 @@ export default function BusinessDashboardView() {
             stock: Number(row.stockQty ?? 0),
             moq:   row.moq ?? 1,
           }) as Product);
-        setProducts(claimed);
+        setClaimedProducts(claimed);
       }
       if (Array.isArray(o)) setRealOrders(o);
     } catch {
@@ -83,6 +87,16 @@ export default function BusinessDashboardView() {
       if (!silent) setLoaded(true);
     }
   }, [supplierId]);
+
+  /* Everything this store sells: catalog rows it OWNS + rows it CLAIMS.
+     Without the owned rows, a store selling its own products showed $0
+     revenue — only claim-model sales were being counted. */
+  const products = useMemo(() => {
+    const byId = new Map<number, Product>();
+    for (const p of state.products) if (p.supplierId === supplierId) byId.set(p.id, p);
+    for (const p of claimedProducts) byId.set(p.id, p); // claim record wins (own price/stock)
+    return Array.from(byId.values());
+  }, [state.products, supplierId, claimedProducts]);
 
   useEffect(() => { load(); }, [load]);
   // Live: realtime ping on new orders/claims for this store, poll as fallback.

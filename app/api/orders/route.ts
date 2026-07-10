@@ -22,6 +22,7 @@ function mapOrder(o: Record<string, unknown>) {
     notes:         o.notes          ?? null,
     sessionId:     o.session_id     ?? null,
     cashierName:   o.cashier_name   ?? null,
+    supplierId:    o.supplier_id    ?? null,
     createdAt:     o.created_at,
   };
 }
@@ -146,6 +147,12 @@ export async function GET(req: Request) {
       if (error) throw error;
 
       const filtered = (orderData ?? []).filter(o => {
+        // Attributed orders (v3.7+): the order KNOWS which store sold it —
+        // trust that and nothing else, so Store A never sees Store B's sale
+        // of the same claimed catalog product.
+        const attributed = (o as Record<string, unknown>).supplier_id;
+        if (attributed != null) return Number(attributed) === supplierId;
+        // Legacy orders (no attribution): fall back to item matching.
         const items = Array.isArray(o.items) ? o.items : [];
         return items.some((item: Record<string, unknown>) => supplierProductIds.has(item.id as number));
       });
@@ -226,6 +233,10 @@ export async function POST(req: Request) {
   const couponCode    = typeof body.couponCode === 'string' && body.couponCode.trim() ? body.couponCode.trim() : null;
   const sessionId     = body.sessionId   != null ? String(body.sessionId)   : null;
   const cashierName   = body.cashierName != null ? String(body.cashierName) : null;
+  // Which STORE sold this order (checkout shop / POS register / invoice).
+  // Drives per-store dashboards; without it legacy item-matching applies.
+  const supplierId    = Number.isInteger(Number(body.supplierId)) && Number(body.supplierId) > 0
+    ? Number(body.supplierId) : null;
 
   const sb = getSupabaseAdmin();
 
@@ -245,6 +256,27 @@ export async function POST(req: Request) {
       });
       if (!error && data) {
         const created = data as Record<string, unknown>;
+        // The RPC predates attribution/POS columns — stamp them after the
+        // fact (best-effort; ignored on pre-v3.7 schemas).
+        if (supplierId != null || sessionId != null || cashierName != null) {
+          const extra: Record<string, unknown> = {};
+          if (supplierId  != null) extra.supplier_id  = supplierId;
+          if (sessionId   != null) extra.session_id   = sessionId;
+          if (cashierName != null) extra.cashier_name = cashierName;
+          try {
+            const { error: exErr } = await sb.from('orders').update(extra).eq('id', String(created.id));
+            if (!exErr) Object.assign(created, extra);
+            else if (extra.supplier_id != null) {
+              // Column set may be partial (e.g. no supplier_id yet) — retry
+              // with just the POS columns so a session link still lands.
+              delete extra.supplier_id;
+              if (Object.keys(extra).length) {
+                const { error: e2 } = await sb.from('orders').update(extra).eq('id', String(created.id));
+                if (!e2) Object.assign(created, extra);
+              }
+            }
+          } catch { /* attribution is best-effort */ }
+        }
         notifyNewOrder(String(created.id), userId, items, Number(created.total ?? 0));
         return NextResponse.json(mapOrder(created), { status: 201 });
       }
@@ -328,24 +360,34 @@ export async function POST(req: Request) {
     try {
       const { data, error } = await sb
         .from('orders')
-        .insert({ ...basePayload, notes, session_id: sessionId, cashier_name: cashierName })
+        .insert({ ...basePayload, notes, session_id: sessionId, cashier_name: cashierName, supplier_id: supplierId })
         .select().single();
       if (error) throw error;
       order = data as Record<string, unknown>;
-    } catch (e1) {
-      if (!isMissingColumnError(e1)) throw e1;
-      // Fall back progressively for pre-migration schemas
+    } catch (e0) {
+      if (!isMissingColumnError(e0)) throw e0;
       try {
         const { data, error } = await sb
-          .from('orders').insert({ ...basePayload, notes }).select().single();
+          .from('orders')
+          .insert({ ...basePayload, notes, session_id: sessionId, cashier_name: cashierName })
+          .select().single();
         if (error) throw error;
         order = data as Record<string, unknown>;
-      } catch (e2) {
-        if (!isMissingColumnError(e2)) throw e2;
-        const { data, error } = await sb
-          .from('orders').insert(basePayload).select().single();
-        if (error) throw error;
-        order = data as Record<string, unknown>;
+      } catch (e1) {
+        if (!isMissingColumnError(e1)) throw e1;
+        // Fall back progressively for pre-migration schemas
+        try {
+          const { data, error } = await sb
+            .from('orders').insert({ ...basePayload, notes }).select().single();
+          if (error) throw error;
+          order = data as Record<string, unknown>;
+        } catch (e2) {
+          if (!isMissingColumnError(e2)) throw e2;
+          const { data, error } = await sb
+            .from('orders').insert(basePayload).select().single();
+          if (error) throw error;
+          order = data as Record<string, unknown>;
+        }
       }
     }
 

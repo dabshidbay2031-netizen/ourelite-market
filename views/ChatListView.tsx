@@ -5,6 +5,7 @@ import { useRouter } from '@/lib/hashRouter';
 import Header from '@/components/Header';
 import { useAuth } from '@/context/AuthContext';
 import { useRealtimePing } from '@/lib/useRealtimePing';
+import StoreAvatar from '@/components/StoreAvatar';
 import type { ChatUser, Message } from '@/lib/types';
 
 interface ConvItem {
@@ -28,8 +29,13 @@ function timeAgo(iso: string) {
 function lastMsgPreview(msg: ConvItem['lastMessage'], myId: string): string {
   if (!msg) return 'Start a conversation…';
   const prefix = msg.senderId === myId ? 'You: ' : '';
-  if (msg.messageType === 'image') return `${prefix}📷 Photo`;
-  return `${prefix}${msg.content ?? ''}`;
+  // Any photo message previews as "📷 Photo" — never as a raw storage URL.
+  if (msg.messageType === 'image' || msg.imageUrl) return `${prefix}📷 Photo`;
+  const content = msg.content ?? '';
+  if (/^https?:\/\/\S+$/i.test(content.trim()) && content.includes('/storage/v1/object/')) {
+    return `${prefix}📷 Photo`;
+  }
+  return `${prefix}${content}`;
 }
 
 export default function ChatListPage() {
@@ -134,7 +140,7 @@ export default function ChatListPage() {
               >
                 {/* Avatar */}
                 <div className="chat-conv-avatar">
-                  <span>{ou?.avatar ?? '👤'}</span>
+                  <StoreAvatar value={ou?.avatar} fallback="👤" alt={`${ou?.name ?? 'User'} photo`} />
                   {ou?.verified && (
                     <span className="chat-verified-dot" title="Verified">✓</span>
                   )}

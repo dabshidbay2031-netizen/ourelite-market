@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from '@/lib/hashRouter';
 import Header from '@/components/Header';
 import { useApp } from '@/context/AppContext';
+import { authHeaders } from '@/lib/clientAuth';
 import { useIsAdmin } from '@/lib/useIsAdmin';
 import { useLiveRefresh } from '@/lib/useLiveRefresh';
 import { useRealtimePing } from '@/lib/useRealtimePing';
@@ -41,7 +42,7 @@ export default function DashboardPage() {
   const [error,      setError]      = useState(false);
   const loadOrders = useCallback(async (silent = false) => {
     try {
-      const res = await fetch('/api/orders', { cache: 'no-store' });
+      const res = await fetch('/api/orders', { cache: 'no-store', headers: await authHeaders() });
       if (!res.ok) throw new Error('request failed');
       const d = await res.json();
       if (Array.isArray(d)) setRealOrders(d);

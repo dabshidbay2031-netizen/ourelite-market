@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Link } from '@/lib/hashRouter';
 import { useRouter } from '@/lib/hashRouter';
 import { getSupabase } from '@/lib/supabase';
+import { useAuth } from '@/context/AuthContext';
 
 type Method   = 'email' | 'google';
 type AcctType = 'user' | 'business' | 'supplier' | 'agent';
@@ -15,6 +16,7 @@ type GoogleStep = 'type' | 'name';
 
 export default function SignupPage() {
   const router = useRouter();
+  const { refreshAccount } = useAuth();
 
   /* ── Shared state ────────────────────────────── */
   const [method,    setMethod]    = useState<Method | null>(null);
@@ -81,7 +83,11 @@ export default function SignupPage() {
     await createRecord(uid, name);
 
     if (data.session) {
-      // Email confirmation disabled — user is logged in immediately
+      // Email confirmation disabled — user is logged in immediately.
+      // AuthContext resolved the account BEFORE the supplier record above
+      // existed (it saw a plain customer) — re-resolve now, or a fresh
+      // business/supplier lands on the CUSTOMER UI until a manual refresh.
+      await refreshAccount().catch(() => {});
       router.push('/profile');
     } else {
       // Email confirmation required — show "check email" message

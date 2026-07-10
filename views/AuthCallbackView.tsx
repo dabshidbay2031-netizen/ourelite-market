@@ -71,6 +71,11 @@ export default function AuthCallbackPage() {
             });
           }
         } catch { /* non-fatal */ }
+        // While the record above was being created, AuthContext may have
+        // already resolved (and cached) this brand-new user as a plain
+        // customer. Drop that cache so the next page load resolves the real
+        // account type instead of flashing/sticking on the customer UI.
+        try { localStorage.removeItem('mg_c_account'); } catch { /* ignore */ }
       }
 
       leaveTo('/profile');

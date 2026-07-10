@@ -5,6 +5,7 @@ import { useRouter, useParams } from '@/lib/hashRouter';
 import dynamic from 'next/dynamic';
 import Header from '@/components/Header';
 import ProductImage from '@/components/ProductImage';
+import StoreAvatar from '@/components/StoreAvatar';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { MOGADISHU_DISTRICTS } from '@/lib/data';
@@ -28,7 +29,26 @@ export default function CheckoutPage() {
 
   // This checkout is scoped to ONE shop. The cart can hold items from several
   // shops; we only place/charge the items belonging to the chosen shop.
-  const shopId = params.shopId ? parseInt(params.shopId, 10) : null;
+  const routeShopId = params.shopId ? parseInt(params.shopId, 10) : null;
+
+  // Plain '/checkout' (e.g. "Buy Now"): when every cart item belongs to the
+  // same shop, that IS the shop — so the receipt still gets the store's name
+  // and logo, and the order is attributed to the right seller.
+  const inferredShopId = useMemo(() => {
+    if (routeShopId != null) return routeShopId;
+    const ids = new Set<number | null>();
+    for (const item of cart) {
+      const p = products.find(x => x.id === item.id);
+      ids.add(p?.supplierId ?? null);
+    }
+    if (ids.size === 1) {
+      const only = ids.values().next().value;
+      return only ?? null;
+    }
+    return null;
+  }, [routeShopId, cart, products]);
+
+  const shopId = inferredShopId;
   const shop   = shopId != null ? suppliers.find(s => s.id === shopId) : null;
   const shopName = shop?.name ?? 'Mogarenta';
   // Online-only stores have no shopfront → delivery is the only option.
@@ -178,6 +198,7 @@ export default function CheckoutPage() {
           items:         shopCart.map(i => ({ id: i.id, qty: i.qty })),
           paymentMethod: payMethod,
           couponCode:    appliedCoupon?.code ?? null,
+          supplierId:    shopId,   // which store sold this order (dashboard attribution)
           notes,
         }),
       });
@@ -339,8 +360,14 @@ export default function CheckoutPage() {
       <div className="checkout-wrap">
 
         {/* Shop being checked out */}
-        <div className="checkout-shop-banner">
-          🛍️ Checkout — <strong>{shop?.icon ?? '🏪'} {shopName}</strong>
+        <div className="checkout-shop-banner" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          🛍️ Checkout —
+          <strong style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ display: 'inline-flex', width: 20, height: 20, borderRadius: 5, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
+              <StoreAvatar value={shop?.icon} alt={`${shopName} logo`} />
+            </span>
+            {shopName}
+          </strong>
         </div>
 
         {/* Order Summary */}

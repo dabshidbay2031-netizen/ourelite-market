@@ -116,7 +116,7 @@ export default function AdminDashboard() {
       } else if (t === 'products') {
         const r = await fetch('/api/products');    setProducts(await r.json());
       } else if (t === 'orders') {
-        const r = await fetch('/api/orders');      setOrders(await r.json());
+        const r = await fetch('/api/orders', { headers: await authHeaders() }); setOrders(await r.json());
       } else if (t === 'users') {
         const r = await fetch('/api/admin/users', { headers: await authHeaders() }); setUsers(await r.json());
       } else if (t === 'team') {

@@ -21,8 +21,10 @@ export default function SupplierProfilePage({ slug }: { slug?: string } = {}) {
   const inventoryMap = useMemo(() =>
     new Map(state.inventory.map(i => [i.id, i.stock])),
   [state.inventory]);
-  const { currentSupplier, user } = useAuth();
+  const { currentSupplier, user, accountType } = useAuth();
   const { products, suppliers, loading } = state;
+  // MOQ / minimum order is wholesale info — only business/supplier viewers see it.
+  const isB2bViewer = accountType === 'business' || accountType === 'supplier';
 
   // Reached two ways: '/supplier/:id' (hash route) and the clean storefront
   // path '/storename' (resolved by slug).
@@ -343,7 +345,8 @@ export default function SupplierProfilePage({ slug }: { slug?: string } = {}) {
                 </div>
                 <div className="modal-body">
                   <div className="bulk-discount-note">
-                    🏷️ {supplier.discount}% bulk discount applies · Min order: {supplier.minOrder} units
+                    🏷️ {supplier.discount}% bulk discount applies
+                    {isB2bViewer && <> · Min order: {supplier.minOrder} units</>}
                   </div>
 
                   <div className="form-group">

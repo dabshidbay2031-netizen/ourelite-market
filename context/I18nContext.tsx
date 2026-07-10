@@ -21,15 +21,11 @@ const I18nContext = createContext<I18nValue>({
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangState] = useState<LangCode>('en');
 
-  // Load language from settings on mount
+  // The app is English-only — a previously saved language choice (from the
+  // old Settings page) is intentionally ignored. The i18n plumbing stays so
+  // other languages can come back later without rewiring the views.
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('mogarenta_settings');
-      if (raw) {
-        const s = JSON.parse(raw);
-        if (s.language) setLangState(toLangCode(s.language));
-      }
-    } catch { /* ignore */ }
+    setLangState(toLangCode('English'));
   }, []);
 
   const setLang = useCallback((l: LangCode) => {

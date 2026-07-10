@@ -141,7 +141,7 @@ export default function SupplierDashboard({ supplier }: Props) {
   async function loadOrders() {
     setOrdersLoading(true);
     try {
-      const res  = await fetch(`/api/orders?supplierId=${supplier.id}`);
+      const res  = await fetch(`/api/orders?supplierId=${supplier.id}`, { headers: await authHeaders() });
       const data = await res.json();
       setOrders(Array.isArray(data) ? data : []);
       setOrdersLoaded(true);

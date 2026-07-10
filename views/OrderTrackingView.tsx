@@ -12,6 +12,8 @@ interface Order {
   id: string; customerName: string; customerPhone: string;
   items: OrderItem[]; subtotal: number; discount: number; total: number;
   paymentMethod: string; status: string; notes?: string; createdAt: string;
+  /** Server-set: the viewer isn't the buyer/seller — customer PII is hidden. */
+  masked?: boolean;
 }
 
 const TIMELINE: { key: string; label: string; icon: string; description: string }[] = [
@@ -69,14 +71,19 @@ export default function OrderTrackingPage() {
   }
 
   useEffect(() => {
-    fetch(`/api/orders/${params.id}`)
-      .then(r => r.json())
-      .then(d => {
+    // Send the JWT so the buyer/seller sees full customer info; a stranger
+    // scanning a receipt QR gets the same order with the PII masked.
+    (async () => {
+      try {
+        const res = await fetch(`/api/orders/${params.id}`, { headers: await authHeaders() });
+        const d   = await res.json();
         if (d.error) setError(d.error);
         else setOrder(d);
-      })
-      .catch(() => setError('Failed to load order'))
-      .finally(() => setLoading(false));
+      } catch {
+        setError('Failed to load order');
+      }
+      setLoading(false);
+    })();
   }, [params.id]);
 
   /* Resolve which products this store sells (owned + claimed). */
@@ -308,7 +315,7 @@ export default function OrderTrackingPage() {
         </div>
         <div className="tracking-pay-method">
           {PAY_ICON[order.paymentMethod] ?? '💳'} {order.paymentMethod.charAt(0).toUpperCase() + order.paymentMethod.slice(1)} Payment
-          {order.customerPhone && <span> · {order.customerPhone}</span>}
+          {!order.masked && order.customerPhone && <span> · {order.customerPhone}</span>}
         </div>
         {order.notes && (
           <div className="tracking-notes">📝 {order.notes}</div>
@@ -340,22 +347,32 @@ export default function OrderTrackingPage() {
         </div>
       )}
 
-      {/* Customer Info */}
-      <div className="tracking-section-card" style={{ marginBottom: 100 }}>
-        <div className="tracking-section-title">Customer</div>
-        <div className="tracking-customer-row">
-          <span>👤</span>
-          <span>{order.customerName}</span>
-        </div>
-        {order.customerPhone && (
-          <div className="tracking-customer-row">
-            <span>📞</span>
-            <a href={`tel:${order.customerPhone}`} style={{ color: 'var(--primary)' }}>
-              {order.customerPhone}
-            </a>
+      {/* Customer Info — hidden on the public (scanned-QR) view */}
+      {order.masked ? (
+        <div className="tracking-section-card" style={{ marginBottom: 100 }}>
+          <div className="tracking-section-title">Customer</div>
+          <div className="tracking-customer-row" style={{ color: 'var(--text-muted)' }}>
+            <span>🔒</span>
+            <span>Customer details are private — sign in as the buyer or the store to see them.</span>
           </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="tracking-section-card" style={{ marginBottom: 100 }}>
+          <div className="tracking-section-title">Customer</div>
+          <div className="tracking-customer-row">
+            <span>👤</span>
+            <span>{order.customerName}</span>
+          </div>
+          {order.customerPhone && (
+            <div className="tracking-customer-row">
+              <span>📞</span>
+              <a href={`tel:${order.customerPhone}`} style={{ color: 'var(--primary)' }}>
+                {order.customerPhone}
+              </a>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

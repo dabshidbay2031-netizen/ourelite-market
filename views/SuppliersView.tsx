@@ -5,6 +5,7 @@ import { useRouter } from '@/lib/hashRouter';
 import Header from '@/components/Header';
 import { authHeaders } from '@/lib/clientAuth';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import StoreAvatar from '@/components/StoreAvatar';
 import type { Supplier } from '@/lib/types';
 
@@ -23,7 +24,10 @@ const emptyForm: SupplierForm = {
 export default function SuppliersPage() {
   const router = useRouter();
   const { state, toast, reloadSuppliers } = useApp();
+  const { accountType } = useAuth();
   const { suppliers, products, loading } = state;
+  // MOQ is wholesale-only information — plain customers don't see it.
+  const isB2bViewer = accountType === 'business' || accountType === 'supplier';
 
   const [showForm, setShowForm]     = useState(false);
   const [editingId, setEditingId]   = useState<number | null>(null);
@@ -142,7 +146,9 @@ export default function SuppliersPage() {
                 <div className="supplier-stats">
                   <div className="sup-stat"><div className="sup-stat-val">⭐ {supplier.rating}</div><div className="sup-stat-lbl">{supplier.reviews} reviews</div></div>
                   <div className="sup-stat"><div className="sup-stat-val">{supplier.discount}%</div><div className="sup-stat-lbl">Bulk Discount</div></div>
-                  <div className="sup-stat"><div className="sup-stat-val">{supplier.minOrder}</div><div className="sup-stat-lbl">Min Order</div></div>
+                  {isB2bViewer && (
+                    <div className="sup-stat"><div className="sup-stat-val">{supplier.minOrder}</div><div className="sup-stat-lbl">Min Order</div></div>
+                  )}
                   <div className="sup-stat"><div className="sup-stat-val">{supplier.deliveryDays}d</div><div className="sup-stat-lbl">Delivery</div></div>
                 </div>
 

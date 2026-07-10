@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from '@/lib/hashRouter';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
+import { authHeaders } from '@/lib/clientAuth';
 import { getCategoryColor, hexToRgba, discountPct, SUBCATEGORIES } from '@/lib/data';
 import { CATEGORIES } from '@/lib/data';
 import ProductImage from '@/components/ProductImage';
@@ -42,9 +43,20 @@ export default function ProductDetailPage() {
   const [myComment,     setMyComment]     = useState('');
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewsLoaded, setReviewsLoaded] = useState(false);
+  // Latest 2 shown first; "Show more" reveals 3 more per tap.
+  const [visibleReviews, setVisibleReviews] = useState(2);
+  // "You reviewed this product" flashes briefly after submitting, then goes away.
+  const [justReviewed,  setJustReviewed]  = useState(false);
 
   const productId = parseInt(params.id ?? params.productId ?? '', 10);
   const product   = products.find(p => p.id === productId);
+
+  // Storefront context: reached via '/:slug/:productId' — reviews written here
+  // credit THAT store (a claimed product credits the claiming store, not the
+  // wholesaler who owns the catalog row).
+  const storefrontStore = params.slug
+    ? suppliers.find(s => s.slug === params.slug!.toLowerCase()) ?? null
+    : null;
 
   // Load reviews on mount
   useEffect(() => {
@@ -62,13 +74,16 @@ export default function ProductDetailPage() {
     setReviewLoading(true);
     const res = await fetch('/api/reviews', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
       body:    JSON.stringify({
         productId, userId: user.id,
         rating:     myRating,
         comment:    myComment.trim() || null,
         userName:   user.displayName ?? (user.email?.split('@')[0] ?? 'User'),
         userAvatar: '👤',
+        // The store this review credits (storefront page → that store;
+        // plain product page → the catalog owner).
+        supplierId: storefrontStore?.id ?? product?.supplierId ?? null,
       }),
     });
     if (res.ok) {
@@ -78,12 +93,22 @@ export default function ProductDetailPage() {
         return [saved, ...filtered];
       });
       setMyRating(0); setMyComment('');
+      // Confirmation badge shows briefly, then disappears on its own.
+      setJustReviewed(true);
+      setTimeout(() => setJustReviewed(false), 4000);
       // The server just recalculated this product's average rating/count —
       // refresh now instead of waiting for the next ~15s live-poll, so the
       // star rating shown on THIS page updates immediately.
       reloadProducts().catch(() => {});
     }
     setReviewLoading(false);
+  };
+
+  /** Back, with a fallback: a page opened directly (scanned QR, shared link)
+   *  has no history to go back to — go to the shop home instead. */
+  const goBack = () => {
+    if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+    else router.push('/');
   };
 
   /* ── Loading skeleton ─── */
@@ -162,7 +187,7 @@ export default function ProductDetailPage() {
       {hasPhotos ? (
         <div className="detail-gallery-wrap">
           {/* Back + wishlist */}
-          <button className="detail-back" onClick={() => router.back()}>
+          <button className="detail-back" onClick={goBack} aria-label="Go back">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
               <path d="M19 12H5M12 5l-7 7 7 7"/>
             </svg>
@@ -239,7 +264,7 @@ export default function ProductDetailPage() {
       ) : (
         /* Emoji fallback */
         <div className="detail-img-wrap" style={bgStyle}>
-          <button className="detail-back" onClick={() => router.back()}>
+          <button className="detail-back" onClick={goBack} aria-label="Go back">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
               <path d="M19 12H5M12 5l-7 7 7 7"/>
             </svg>
@@ -386,7 +411,12 @@ export default function ProductDetailPage() {
               Add to Cart
             </button>
             <button className="btn btn-primary btn-lg" disabled={stock === 0}
-              onClick={() => { addToCart(product.id, qty); router.push('/checkout'); }}>
+              onClick={() => {
+                addToCart(product.id, qty);
+                // Shop-scoped checkout keeps the store's name/logo on the
+                // receipt and attributes the sale to the right seller.
+                router.push(product.supplierId != null ? `/checkout/${product.supplierId}` : '/checkout');
+              }}>
               Buy Now
             </button>
           </div>
@@ -435,7 +465,8 @@ export default function ProductDetailPage() {
             </button>
           </div>
         )}
-        {user && myExistingReview && (
+        {/* Brief confirmation right after submitting — hides itself */}
+        {user && justReviewed && myExistingReview && (
           <div className="review-my-badge">
             ✓ You reviewed this product — {['','★','★★','★★★','★★★★','★★★★★'][myExistingReview.rating]}
           </div>
@@ -453,7 +484,7 @@ export default function ProductDetailPage() {
           <div className="review-empty">No reviews yet — be the first!</div>
         )}
         <div className="review-list">
-          {reviews.map(r => (
+          {reviews.slice(0, visibleReviews).map(r => (
             <div key={r.id} className="review-card">
               <div className="review-card-header">
                 <span className="review-avatar">{r.userAvatar}</span>
@@ -471,6 +502,16 @@ export default function ProductDetailPage() {
             </div>
           ))}
         </div>
+        {/* Latest 2 first; each tap reveals 3 more */}
+        {reviews.length > visibleReviews && (
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
+            onClick={() => setVisibleReviews(n => n + 3)}
+          >
+            Show more (+{Math.min(3, reviews.length - visibleReviews)} of {reviews.length - visibleReviews})
+          </button>
+        )}
       </div>
 
       {/* ── Similar products ─── */}

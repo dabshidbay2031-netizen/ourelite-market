@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import { useRouter } from '@/lib/hashRouter';
 import Header from '@/components/Header';
 import { authHeaders } from '@/lib/clientAuth';
@@ -10,24 +11,40 @@ import { useLiveRefresh } from '@/lib/useLiveRefresh';
 import { useRealtimePing } from '@/lib/useRealtimePing';
 import ErrorState from '@/components/ErrorState';
 
+const Receipt = dynamic(() => import('@/components/Receipt'), { ssr: false });
+
 interface OrderItem { id: number; qty: number; }
 interface Order {
   id: string; customerName: string; customerPhone: string;
   items: OrderItem[]; subtotal: number; discount: number; total: number;
-  paymentMethod: string; status: string; notes?: string; createdAt: string; userId?: string;
+  paymentMethod: string; status: string; notes?: string; createdAt: string;
+  userId?: string; supplierId?: number | null;
 }
 
-const STATUS_OPTIONS = ['pending','processing','completed','cancelled','bulk_pending'];
 const STATUS_MAP: Record<string, { label: string; color: string; bg: string }> = {
   completed:   { label: 'Completed',  color: '#059669', bg: '#d1fae5' },
   pending:     { label: 'Pending',    color: '#d97706', bg: '#fef3c7' },
   processing:  { label: 'Processing', color: '#2563eb', bg: '#dbeafe' },
+  shipped:     { label: 'Shipped',    color: '#4f46e5', bg: '#e0e7ff' },
   cancelled:   { label: 'Cancelled',  color: '#dc2626', bg: '#fee2e2' },
+  refunded:    { label: 'Refunded',   color: '#7c3aed', bg: '#ede9fe' },
   bulk_pending:{ label: 'Bulk Order', color: '#7c3aed', bg: '#ede9fe' },
   // Soft-deleted: stays in the history forever, excluded from revenue
   deleted:     { label: '🗑 Deleted', color: '#6b7280', bg: '#f3f4f6' },
 };
-const PAY_ICON: Record<string, string> = { waafi:'📱', cash:'💵', card:'💳', bulk:'📦' };
+
+/* An order only moves FORWARD through fulfillment (the server enforces the
+   same rule) — the dropdown offers the current stage, later stages, and a
+   cancel exit. Never an earlier stage. */
+const STAGES = ['pending', 'processing', 'shipped', 'completed'];
+function statusChoices(current: string): string[] {
+  if (current === 'bulk_pending') return ['bulk_pending', ...STAGES.slice(1), 'cancelled'];
+  const idx = STAGES.indexOf(current);
+  if (idx === -1) return [current];                 // terminal — nothing to offer
+  return [...STAGES.slice(idx), 'cancelled'];
+}
+
+const PAY_ICON: Record<string, string> = { waafi:'📱', cash:'💵', card:'💳', bulk:'📦', sifalo:'📱', invoice:'📋' };
 
 type Tab = 'mine' | 'store';
 
@@ -35,7 +52,7 @@ export default function OrdersPage() {
   const router = useRouter();
   const { user, accountType, currentSupplier, loading: authLoading } = useAuth();
   const { state, toast } = useApp();
-  const { products } = state;
+  const { products, suppliers } = state;
 
   // Sellers (business/supplier with a store) also get a "My Store" tab showing
   // the orders their store has received. Everyone else only sees "My Orders".
@@ -48,6 +65,7 @@ export default function OrdersPage() {
   const [tab, setTab]               = useState<Tab>('mine');
   const [statusEditing, setStatusEditing] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
 
   // Non-sellers can never be on the store tab.
   const activeTab: Tab = isSeller ? tab : 'mine';
@@ -59,7 +77,8 @@ export default function OrdersPage() {
         ? `/api/orders?supplierId=${currentSupplier.id}`
         : user ? `/api/orders?userId=${user.id}` : null;
       if (!url) { setOrders([]); if (!silent) setLoading(false); return; }
-      const res  = await fetch(url, { cache: 'no-store' });
+      // Orders carry customer PII — the API requires the caller's JWT.
+      const res  = await fetch(url, { cache: 'no-store', headers: await authHeaders() });
       if (!res.ok) throw new Error('request failed');
       const data = await res.json();
       setOrders(Array.isArray(data) ? data : []);
@@ -263,14 +282,21 @@ export default function OrdersPage() {
                   </div>
                 )}
 
-                {/* Track button */}
-                <div style={{ padding: '2px 0 8px' }}>
+                {/* Track + reprint */}
+                <div style={{ padding: '2px 0 8px', display: 'flex', gap: 8 }}>
                   <button
                     className="btn btn-ghost btn-sm"
-                    style={{ width: '100%', justifyContent: 'center', gap: 6 }}
+                    style={{ flex: 1, justifyContent: 'center', gap: 6 }}
                     onClick={() => router.push(`/orders/${order.id}`)}
                   >
                     📍 Track Order
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    style={{ flex: 1, justifyContent: 'center', gap: 6 }}
+                    onClick={() => setReceiptOrder(order)}
+                  >
+                    🧾 Receipt
                   </button>
                 </div>
 
@@ -283,14 +309,14 @@ export default function OrdersPage() {
                   </div>
                 ) : (
                 <div className="order-crud-row">
-                  {/* Status change */}
+                  {/* Status change — forward stages only (no going back) */}
                   <select
                     className="order-status-select"
                     value={order.status}
-                    disabled={isBusy}
+                    disabled={isBusy || statusChoices(order.status).length <= 1}
                     onChange={e => handleStatusChange(order.id, e.target.value)}
                   >
-                    {STATUS_OPTIONS.map(s => (
+                    {statusChoices(order.status).map(s => (
                       <option key={s} value={s}>{STATUS_MAP[s]?.label ?? s}</option>
                     ))}
                   </select>
@@ -315,6 +341,35 @@ export default function OrdersPage() {
           })}
         </div>
       )}
+
+      {/* Reprint receipt — the store's copy of any past order */}
+      {receiptOrder && (() => {
+        // Whose receipt header? The seller's store: prefer the order's own
+        // attribution, then the signed-in store, then the first item's owner.
+        const seller =
+          (receiptOrder.supplierId != null ? suppliers.find(s => s.id === receiptOrder.supplierId) : null)
+          ?? (activeTab === 'store' ? currentSupplier : null)
+          ?? (() => {
+            const firstProd = products.find(p => p.id === receiptOrder.items[0]?.id);
+            return firstProd?.supplierId != null ? suppliers.find(s => s.id === firstProd.supplierId) : null;
+          })();
+        return (
+          <Receipt
+            orderId={receiptOrder.id}
+            businessName={seller?.name}
+            businessIcon={seller?.icon}
+            customerName={receiptOrder.customerName}
+            paymentMethod={receiptOrder.paymentMethod}
+            items={receiptOrder.items}
+            products={products}
+            subtotal={Number(receiptOrder.subtotal)}
+            discount={Number(receiptOrder.discount)}
+            total={Number(receiptOrder.total)}
+            date={receiptOrder.createdAt}
+            onClose={() => setReceiptOrder(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

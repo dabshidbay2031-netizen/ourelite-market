@@ -6,11 +6,31 @@ import Header from '@/components/Header';
 import ProductImage from '@/components/ProductImage';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
+import { authHeaders } from '@/lib/clientAuth';
 import { useMyProductIds } from '@/lib/useMyProductIds';
 import { CATEGORIES } from '@/lib/data';
 import { enqueueOrder, getQueue, dequeueOrder } from '@/lib/offlineQueue';
 import { useCashier } from '@/context/CashierContext';
-import type { CartItem, PaymentMethod, PosSession } from '@/lib/types';
+import type { CartItem, Customer, PaymentMethod, PosSession } from '@/lib/types';
+
+/* Register behavior configured in Settings → Point of Sale. */
+interface PosSettings {
+  defaultPayment:      PaymentMethod;
+  requireCustomerName: boolean;
+  autoPrint:           boolean;
+}
+function readPosSettings(): PosSettings {
+  try {
+    const s = JSON.parse(localStorage.getItem('mogarenta_settings') ?? '{}');
+    return {
+      defaultPayment:      (['cash', 'waafi', 'card'].includes(s.defaultPayment) ? s.defaultPayment : 'cash') as PaymentMethod,
+      requireCustomerName: !!s.requireCustomerName,
+      autoPrint:           !!s.autoPrint,
+    };
+  } catch {
+    return { defaultPayment: 'cash', requireCustomerName: false, autoPrint: false };
+  }
+}
 
 const Receipt = dynamic(() => import('@/components/Receipt'), { ssr: false });
 
@@ -112,6 +132,15 @@ export default function POSPage() {
   const [receiptData, setReceiptData] = useState<{
     items: CartItem[]; name: string; subtotal: number; discount: number; total: number; method: string;
   } | null>(null);
+
+  /* ── Settings (Settings → Point of Sale) ─────────────────────── */
+  const [posSettings, setPosSettings] = useState<PosSettings>({ defaultPayment: 'cash', requireCustomerName: false, autoPrint: false });
+  useEffect(() => { setPosSettings(readPosSettings()); }, []);
+
+  /* ── Invoice a credit customer (pay later) ───────────────────── */
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [invoiceCustomerId, setInvoiceCustomerId] = useState('');
+  const [invoicing, setInvoicing] = useState(false);
 
   /* ── Product filter ──────────────────────────────────────────── */
   const [search, setSearch] = useState('');
@@ -311,14 +340,31 @@ export default function POSPage() {
   /* ── Checkout handlers ───────────────────────────────────────── */
   function openCheckout() {
     if (!posCart.length) return;
-    setSplits([{ method: 'cash', amount: posTotal.toFixed(2) }]);
-    setCheckoutName('Walk-in Customer');
+    setSplits([{ method: posSettings.defaultPayment, amount: posTotal.toFixed(2) }]);
+    // When Settings require a customer name, don't pre-fill the placeholder —
+    // the cashier must type a real one.
+    setCheckoutName(posSettings.requireCustomerName ? '' : 'Walk-in Customer');
     setCheckoutPhone('');
+    setInvoiceCustomerId('');
     setShowCheckout(true);
+    // Credit customers this store can invoice (owner session only)
+    if (currentSupplier && customers.length === 0) {
+      (async () => {
+        try {
+          const res = await fetch(`/api/customers?supplierId=${currentSupplier.id}`, { headers: await authHeaders() });
+          const d = await res.json();
+          if (Array.isArray(d)) setCustomers(d);
+        } catch { /* invoicing simply stays hidden */ }
+      })();
+    }
   }
 
   async function handlePlaceOrder() {
     if (placingOrder) return;
+    if (posSettings.requireCustomerName && !checkoutName.trim()) {
+      toast('Customer name is required (Settings → Point of Sale)', 'error');
+      return;
+    }
     if (splitTotal < posTotal - 0.01) {
       toast(`Still owed $${(posTotal - splitTotal).toFixed(2)} — add more payment`, 'error');
       return;
@@ -342,6 +388,7 @@ export default function POSPage() {
       paymentMethod: payMethod,
       sessionId:     session && session !== 'loading' ? session.id   : null,
       cashierName:   session && session !== 'loading' ? session.cashierName : null,
+      supplierId:    currentSupplier?.id ?? null,   // this register's store (dashboard attribution)
       notes:         notesParts.length ? notesParts.join(' | ') : null,
     };
 
@@ -384,6 +431,83 @@ export default function POSPage() {
     }
   }
 
+  /* ── Invoice the sale to a credit customer (pay later) ─────────
+     Places the order (stock moves, sale is recorded) with payment method
+     'invoice', then opens a receivable on the customer's ledger — the
+     balance shows on the Customers page until they pay it off. */
+  async function handleInvoiceSale() {
+    if (invoicing || !posCart.length) return;
+    const customer = customers.find(c => c.id === invoiceCustomerId);
+    if (!customer) { toast('Choose a customer to invoice', 'error'); return; }
+    if (!currentSupplier) { toast('Invoicing needs the store owner account', 'error'); return; }
+
+    setInvoicing(true);
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerName:  customer.name,
+          customerPhone: customer.phone,
+          userId:        user?.id ?? null,
+          items:         posCart.map(i => ({ id: i.id, qty: i.qty })),
+          paymentMethod: 'invoice',
+          status:        'completed',
+          sessionId:     session && session !== 'loading' ? session.id : null,
+          cashierName:   session && session !== 'loading' ? session.cashierName : null,
+          supplierId:    currentSupplier.id,
+          notes:         `Invoiced to ${customer.name} — pay later`,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        toast(err?.error ?? 'Could not place the order', 'error');
+        setInvoicing(false);
+        return;
+      }
+      const order = await res.json() as { id: string; total: number };
+
+      const invRes = await fetch('/api/invoices', {
+        method: 'POST', headers: await authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          supplierId:   currentSupplier.id,
+          customerId:   customer.id,
+          customerName: customer.name,
+          items: posCart.map(i => {
+            const p = products.find(x => x.id === i.id);
+            return { id: i.id, name: p?.name ?? `#${i.id}`, price: p?.price ?? 0, qty: i.qty };
+          }),
+          discount: 0,
+          orderId:  order.id,
+          notes:    'POS credit sale',
+        }),
+      });
+      if (!invRes.ok) {
+        const err = await invRes.json().catch(() => null);
+        toast(err?.error ?? 'Order placed but the invoice was not recorded', 'warning');
+      } else {
+        toast(`Invoiced to ${customer.name} ✓`, 'success');
+      }
+
+      const snapshot = [...posCart];
+      setLastOrderId(order.id);
+      setReceiptData({
+        items:    snapshot,
+        name:     customer.name,
+        subtotal: posTotal,
+        discount: 0,
+        total:    order.total,
+        method:   'invoice',
+      });
+      setPosCart([]);
+      setShowCheckout(false);
+      setShowReceipt(true);
+      reloadProducts();
+    } catch {
+      toast('Network error — nothing was recorded', 'error');
+    }
+    setInvoicing(false);
+  }
+
   /* ── Render: loading ─────────────────────────────────────────── */
   if (session === 'loading') {
     return (
@@ -410,6 +534,7 @@ export default function POSPage() {
           subtotal={receiptData.subtotal}
           discount={receiptData.discount}
           total={receiptData.total}
+          autoPrint={posSettings.autoPrint}
           onClose={() => { setShowReceipt(false); setReceiptData(null); }}
         />
         <div style={{ padding: '0 16px 80px' }}>
@@ -693,10 +818,33 @@ export default function POSPage() {
                 <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowCheckout(false)}>Back</button>
                 <button className="btn btn-primary" style={{ flex: 1 }}
                   onClick={handlePlaceOrder}
-                  disabled={placingOrder || splitTotal < posTotal - 0.01}>
+                  disabled={placingOrder || invoicing || splitTotal < posTotal - 0.01}>
                   {placingOrder ? 'Processing…' : `Charge $${posTotal.toFixed(2)}`}
                 </button>
               </div>
+
+              {/* Invoice to a credit customer — no payment now, balance
+                  lands on their ledger in the Customers page */}
+              {currentSupplier && customers.length > 0 && (
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px dashed var(--border)' }}>
+                  <div style={{ fontWeight: 600, marginBottom: 8, fontSize: '.9rem' }}>📋 Or invoice a customer (pay later)</div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <select className="form-input" style={{ flex: 1 }}
+                      value={invoiceCustomerId}
+                      onChange={e => setInvoiceCustomerId(e.target.value)}>
+                      <option value="">Select customer…</option>
+                      {customers.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}{c.phone ? ` — ${c.phone}` : ''}</option>
+                      ))}
+                    </select>
+                    <button className="btn btn-secondary"
+                      onClick={handleInvoiceSale}
+                      disabled={invoicing || placingOrder || !invoiceCustomerId}>
+                      {invoicing ? '…' : `Invoice $${posTotal.toFixed(2)}`}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

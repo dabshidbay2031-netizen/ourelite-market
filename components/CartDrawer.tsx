@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { useRouter } from '@/lib/hashRouter';
 import { useApp } from '@/context/AppContext';
 import ProductImage from '@/components/ProductImage';
+import StoreAvatar from '@/components/StoreAvatar';
 
 /** A cart's items grouped by the shop that sells them. */
 interface ShopGroup {
@@ -87,7 +88,12 @@ export default function CartDrawer() {
               {groups.map(g => (
                 <div key={g.shopId ?? 'none'} className="cart-shop-group">
                   <div className="cart-shop-header">
-                    <span className="cart-shop-name">{g.shopIcon} {g.shopName}</span>
+                    <span className="cart-shop-name" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ display: 'inline-flex', width: 18, height: 18, borderRadius: 4, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
+                        <StoreAvatar value={g.shopIcon} alt={`${g.shopName} logo`} />
+                      </span>
+                      {g.shopName}
+                    </span>
                     <span className="cart-shop-subtotal">${g.subtotal.toFixed(2)}</span>
                   </div>
 

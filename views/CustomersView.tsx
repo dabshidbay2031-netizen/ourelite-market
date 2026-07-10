@@ -3,6 +3,9 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import Header from '@/components/Header';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
+import { authHeaders } from '@/lib/clientAuth';
+import { useMyProductIds } from '@/lib/useMyProductIds';
 import type { Customer } from '@/lib/types';
 
 /* ─── constants ──────────────────────────────────── */
@@ -18,11 +21,16 @@ function avatarBg(name: string) {
 function makeId() {
   return `local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 }
+function fmtDate(iso: string) {
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+const PAY_LABEL: Record<string, string> = { cash: '💵 Cash', waafi: '📱 Waafi', card: '💳 Card', sifalo: '📱 Sifalo' };
 
 const emptyForm = { name: '', phone: '', email: '', address: '', notes: '' };
 type FormState = typeof emptyForm;
 
-/* ─── Invoice item ───────────────────────────────── */
+/* ─── Invoice types ──────────────────────────────── */
 interface InvItem {
   productId: number;
   name: string;
@@ -30,10 +38,32 @@ interface InvItem {
   qty: number;
 }
 
+interface InvoicePayment { id: number; amount: number; method: string; note: string | null; paidAt: string; }
+interface Invoice {
+  id: string; supplierId: number; customerId: string; customerName: string;
+  items: { id: number; name: string; price: number; qty: number }[];
+  subtotal: number; discount: number; total: number; paidTotal: number; balance: number;
+  status: string; notes: string | null; orderId: string | null; createdAt: string;
+  payments: InvoicePayment[];
+}
+
 /* ─── Component ──────────────────────────────────── */
 export default function CustomersPage() {
-  const { state, toast } = useApp();
+  const { state, toast, reloadProducts } = useApp();
+  const { user, currentSupplier } = useAuth();
+  const supplierId = currentSupplier?.id ?? null;
   const products = state.products;
+
+  // Only THIS store's products are invoiceable — owned catalog rows plus
+  // claimed ones, at the store's own claim price. Never other shops' items.
+  const { ids: myIds, scoped: myScoped, claimed: myClaims } = useMyProductIds();
+  const myProducts = useMemo(() => {
+    const list = myScoped ? products.filter(p => myIds.has(p.id)) : products;
+    return list.map(p => {
+      const claim = myClaims.get(p.id);
+      return claim ? { ...p, price: claim.customPrice } : p;
+    });
+  }, [products, myIds, myScoped, myClaims]);
 
   /* customers state */
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -47,7 +77,7 @@ export default function CustomersPage() {
   const [saving,     setSaving]     = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  /* invoice state */
+  /* invoice creation state */
   const [invoiceCust, setInvoiceCust] = useState<Customer | null>(null);
   const [invItems,    setInvItems]    = useState<InvItem[]>([]);
   const [invDiscount, setInvDiscount] = useState('0');
@@ -55,13 +85,22 @@ export default function CustomersPage() {
   const [invNotes,    setInvNotes]    = useState('');
   const [savingInv,   setSavingInv]   = useState(false);
 
-  /* ── Load: API first, localStorage fallback ─────── */
+  /* ledger (per-customer invoices + payments) state */
+  const [invoices,   setInvoices]   = useState<Invoice[]>([]);
+  const [ledgerCust, setLedgerCust] = useState<Customer | null>(null);
+  const [payingInvId, setPayingInvId] = useState<string | null>(null);
+  const [payAmount,  setPayAmount]  = useState('');
+  const [payMethod,  setPayMethod]  = useState('cash');
+  const [savingPay,  setSavingPay]  = useState(false);
+
+  /* ── Load customers: API first, localStorage fallback ─────── */
   useEffect(() => {
     (async () => {
       try {
-        const res  = await fetch('/api/customers');
+        const url = supplierId != null ? `/api/customers?supplierId=${supplierId}` : '/api/customers';
+        const res  = await fetch(url, { headers: await authHeaders() });
         const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
+        if (Array.isArray(data)) {
           setCustomers(data);
           localStorage.setItem(LOCAL_KEY, JSON.stringify(data));
           setLoading(false);
@@ -75,7 +114,32 @@ export default function CustomersPage() {
       } catch {}
       setLoading(false);
     })();
-  }, []);
+  }, [supplierId]);
+
+  /* ── Load this store's invoice ledger ───────────────────────── */
+  const loadInvoices = useCallback(async () => {
+    if (supplierId == null) return;
+    try {
+      const res = await fetch(`/api/invoices?supplierId=${supplierId}`, { headers: await authHeaders() });
+      const d   = await res.json();
+      if (Array.isArray(d)) setInvoices(d);
+    } catch { /* ledger simply stays empty */ }
+  }, [supplierId]);
+  useEffect(() => { loadInvoices(); }, [loadInvoices]);
+
+  /* Per-customer money summary: invoiced / paid / still owed */
+  const ledgerByCustomer = useMemo(() => {
+    const m = new Map<string, { invoiced: number; paid: number; balance: number; count: number }>();
+    for (const inv of invoices) {
+      const g = m.get(inv.customerId) ?? { invoiced: 0, paid: 0, balance: 0, count: 0 };
+      g.invoiced += inv.total;
+      g.paid     += inv.paidTotal;
+      g.balance  += inv.balance;
+      g.count    += 1;
+      m.set(inv.customerId, g);
+    }
+    return m;
+  }, [invoices]);
 
   /* ── Persist helper ──────────────────────────────── */
   const persist = useCallback((updated: Customer[]) => {
@@ -102,7 +166,7 @@ export default function CustomersPage() {
       try {
         const res = await fetch(`/api/customers/${editingId}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await authHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify(form),
         });
         if (res.ok) {
@@ -120,8 +184,8 @@ export default function CustomersPage() {
       try {
         const res = await fetch('/api/customers', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(form),
+          headers: await authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ ...form, supplierId }),
         });
         if (res.ok) {
           const newC = await res.json() as Customer;
@@ -145,7 +209,7 @@ export default function CustomersPage() {
     if (!confirm('Delete this customer?')) return;
     setDeletingId(id);
     try {
-      await fetch(`/api/customers/${id}`, { method: 'DELETE' });
+      await fetch(`/api/customers/${id}`, { method: 'DELETE', headers: await authHeaders() });
     } catch {}
     persist(customers.filter(c => c.id !== id));
     setDeletingId(null);
@@ -159,7 +223,7 @@ export default function CustomersPage() {
   }
 
   function addProduct(productId: number) {
-    const p = products.find(x => x.id === productId);
+    const p = myProducts.find(x => x.id === productId);
     if (!p) return;
     setInvItems(prev => {
       const exists = prev.find(i => i.productId === productId);
@@ -182,38 +246,114 @@ export default function CustomersPage() {
   const invDiscountAmt = Math.min(Math.max(parseFloat(invDiscount) || 0, 0), invSubtotal);
   const invTotal       = invSubtotal - invDiscountAmt;
 
+  /** Record the sale as an order (stock moves, revenue counts). */
+  async function placeInvoiceOrder(paymentMethod: string, notes: string): Promise<{ id: string } | null> {
+    const res = await fetch('/api/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customerName:  invoiceCust!.name,
+        customerPhone: invoiceCust!.phone,
+        userId:        user?.id ?? null,
+        items:         invItems.map(i => ({ id: i.productId, qty: i.qty })),
+        paymentMethod,
+        status:        'completed',
+        supplierId,
+        notes,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      toast(err?.error ?? 'Failed to save order', 'error');
+      return null;
+    }
+    return res.json();
+  }
+
+  /** Credit sale: order + open receivable on the customer's ledger. */
+  async function handleSaveAsInvoice() {
+    if (!invoiceCust || invItems.length === 0) { toast('Add at least one product', 'error'); return; }
+    if (supplierId == null) { toast('Invoicing needs a business account', 'error'); return; }
+    setSavingInv(true);
+    try {
+      const order = await placeInvoiceOrder('invoice', `Invoiced to ${invoiceCust.name} — pay later${invNotes ? ` | ${invNotes}` : ''}`);
+      if (!order) { setSavingInv(false); return; }
+      const res = await fetch('/api/invoices', {
+        method: 'POST',
+        headers: await authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          supplierId,
+          customerId:   invoiceCust.id,
+          customerName: invoiceCust.name,
+          items:        invItems.map(i => ({ id: i.productId, name: i.name, price: i.price, qty: i.qty })),
+          discount:     invDiscountAmt,
+          notes:        invNotes.trim() || null,
+          orderId:      order.id,
+        }),
+      });
+      if (res.ok) {
+        toast(`Invoice saved — ${invoiceCust.name} owes $${invTotal.toFixed(2)}`, 'success');
+        setInvoiceCust(null);
+        loadInvoices();
+        reloadProducts().catch(() => {});
+      } else {
+        const err = await res.json().catch(() => null);
+        toast(err?.error ?? 'Order placed but invoice not recorded', 'warning');
+      }
+    } catch {
+      toast('Failed to save invoice', 'error');
+    }
+    setSavingInv(false);
+  }
+
+  /** Immediate sale paid on the spot (cash/waafi/card). */
   async function handleSaveAsOrder() {
     if (!invoiceCust || invItems.length === 0) { toast('Add at least one product', 'error'); return; }
     setSavingInv(true);
     try {
-      const res = await fetch('/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customerName:  invoiceCust.name,
-          customerPhone: invoiceCust.phone,
-          items:         invItems.map(i => ({ id: i.productId, qty: i.qty })),
-          subtotal:      invSubtotal,
-          discount:      invDiscountAmt,
-          total:         invTotal,
-          paymentMethod: invPayment,
-          status:        'completed',
-          notes:         invNotes,
-        }),
-      });
-      if (res.ok) { toast('Order saved ✓', 'success'); setInvoiceCust(null); }
-      else         { toast('Failed to save order', 'error'); }
+      const order = await placeInvoiceOrder(invPayment, invNotes.trim() || `Sold to ${invoiceCust.name}`);
+      if (order) {
+        toast('Order saved ✓', 'success');
+        setInvoiceCust(null);
+        reloadProducts().catch(() => {});
+      }
     } catch {
       toast('Failed to save order', 'error');
     }
     setSavingInv(false);
   }
 
+  /* ── Record a payment against an invoice ─────────── */
+  async function handleRecordPayment(inv: Invoice) {
+    const amount = parseFloat(payAmount);
+    if (!Number.isFinite(amount) || amount <= 0) { toast('Enter a valid amount', 'error'); return; }
+    if (amount > inv.balance + 0.005) { toast(`Max payment is the $${inv.balance.toFixed(2)} balance`, 'error'); return; }
+    setSavingPay(true);
+    try {
+      const res = await fetch(`/api/invoices/${inv.id}`, {
+        method: 'PATCH',
+        headers: await authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ payment: { amount, method: payMethod } }),
+      });
+      if (res.ok) {
+        const updated = await res.json() as Invoice;
+        setInvoices(prev => prev.map(v => v.id === inv.id ? updated : v));
+        setPayingInvId(null); setPayAmount('');
+        toast(updated.status === 'paid' ? 'Invoice fully paid ✓' : `Payment recorded — $${updated.balance.toFixed(2)} remaining`, 'success');
+      } else {
+        const err = await res.json().catch(() => null);
+        toast(err?.error ?? 'Failed to record payment', 'error');
+      }
+    } catch {
+      toast('Network error — payment not recorded', 'error');
+    }
+    setSavingPay(false);
+  }
+
   function handlePrint() {
     if (!invoiceCust || invItems.length === 0) { toast('Add at least one product', 'error'); return; }
 
-    let storeName = 'Mogarenta Store';
-    try { storeName = JSON.parse(localStorage.getItem('mogarenta_settings') || '{}').storeName || storeName; } catch {}
+    const storeName = currentSupplier?.name ?? 'Mogarenta Store';
 
     const invNum = `INV-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
     const date   = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
@@ -301,6 +441,20 @@ export default function CustomersPage() {
     );
   }, [customers, search]);
 
+  const ledgerInvoices = useMemo(
+    () => (ledgerCust ? invoices.filter(v => v.customerId === ledgerCust.id) : []),
+    [invoices, ledgerCust]
+  );
+  const ledgerTotals = useMemo(() => ledgerInvoices.reduce(
+    (t, v) => ({ invoiced: t.invoiced + v.total, paid: t.paid + v.paidTotal, balance: t.balance + v.balance }),
+    { invoiced: 0, paid: 0, balance: 0 },
+  ), [ledgerInvoices]);
+
+  const totalOutstanding = useMemo(
+    () => invoices.reduce((s, v) => s + v.balance, 0),
+    [invoices]
+  );
+
   /* ── Render ──────────────────────────────────────── */
   return (
     <div className="page-anim">
@@ -310,7 +464,10 @@ export default function CustomersPage() {
         <span className="page-title">👥 Customers</span>
         <button className="btn btn-primary btn-sm" onClick={openAdd}>+ Add Customer</button>
       </div>
-      <p className="page-subtitle">{customers.length} customer{customers.length !== 1 ? 's' : ''}</p>
+      <p className="page-subtitle">
+        {customers.length} customer{customers.length !== 1 ? 's' : ''}
+        {totalOutstanding > 0 && <> · <strong style={{ color: 'var(--danger)' }}>${totalOutstanding.toFixed(2)} owed to you</strong></>}
+      </p>
 
       {/* Search */}
       {customers.length > 3 && (
@@ -352,7 +509,9 @@ export default function CustomersPage() {
             <div className="empty-sub">Try a different name or number</div>
           </div>
         ) : (
-          filtered.map(c => (
+          filtered.map(c => {
+            const ledger = ledgerByCustomer.get(c.id);
+            return (
             <div key={c.id} className="cust-card">
               <div className="cust-avatar" style={{ background: avatarBg(c.name) }}>
                 {initials(c.name)}
@@ -363,6 +522,22 @@ export default function CustomersPage() {
                 {c.email   && <div className="cust-detail">✉️ {c.email}</div>}
                 {c.address && <div className="cust-detail">📍 {c.address}</div>}
                 {c.notes   && <div className="cust-notes">{c.notes}</div>}
+                {ledger && ledger.count > 0 && (
+                  <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: '.72rem', fontWeight: 700 }}>
+                    <span style={{ padding: '2px 8px', borderRadius: 99, background: 'var(--primary-light)', color: 'var(--primary)' }}>
+                      📋 {ledger.count} invoice{ledger.count !== 1 ? 's' : ''} · ${ledger.invoiced.toFixed(2)}
+                    </span>
+                    {ledger.balance > 0.005 ? (
+                      <span style={{ padding: '2px 8px', borderRadius: 99, background: '#fee2e2', color: '#dc2626' }}>
+                        Owes ${ledger.balance.toFixed(2)}
+                      </span>
+                    ) : (
+                      <span style={{ padding: '2px 8px', borderRadius: 99, background: '#d1fae5', color: '#059669' }}>
+                        ✓ Paid up
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="cust-actions">
                 <button
@@ -370,6 +545,13 @@ export default function CustomersPage() {
                   style={{ fontSize: '.75rem', padding: '6px 10px' }}
                   onClick={() => openInvoice(c)}
                 >📋 Invoice</button>
+                {ledger && ledger.count > 0 && (
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: '.75rem', padding: '6px 10px' }}
+                    onClick={() => { setLedgerCust(c); setPayingInvId(null); }}
+                  >📒 Ledger</button>
+                )}
                 <button className="btn btn-ghost btn-sm crud-edit-btn" onClick={() => openEdit(c)}>✏️</button>
                 <button
                   className="btn btn-ghost btn-sm crud-del-btn"
@@ -378,7 +560,8 @@ export default function CustomersPage() {
                 >{deletingId === c.id ? '…' : '🗑️'}</button>
               </div>
             </div>
-          ))
+            );
+          })
         )}
       </div>
 
@@ -442,9 +625,9 @@ export default function CustomersPage() {
                 </div>
               </div>
 
-              {/* Product selector */}
+              {/* Product selector — this store's own products only */}
               <div className="form-group">
-                <label className="form-label">Add Product</label>
+                <label className="form-label">Add Product (your store)</label>
                 <select
                   className="form-input"
                   defaultValue=""
@@ -455,8 +638,10 @@ export default function CustomersPage() {
                     }
                   }}
                 >
-                  <option value="" disabled>Select a product to add…</option>
-                  {products.map(p => (
+                  <option value="" disabled>
+                    {myProducts.length === 0 ? 'No products in your store yet' : 'Select a product to add…'}
+                  </option>
+                  {myProducts.map(p => (
                     <option key={p.id} value={p.id}>
                       {p.name} — ${p.price.toFixed(2)}
                     </option>
@@ -493,10 +678,10 @@ export default function CustomersPage() {
                   <input className="form-input" type="number" min="0" step="0.01" placeholder="0.00" value={invDiscount} onChange={e => setInvDiscount(e.target.value)} />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Payment Method</label>
+                  <label className="form-label">Payment (if paid now)</label>
                   <select className="form-input" value={invPayment} onChange={e => setInvPayment(e.target.value)}>
-                    <option value="waafi">📱 Waafi</option>
                     <option value="cash">💵 Cash</option>
+                    <option value="waafi">📱 Waafi</option>
                     <option value="card">💳 Card</option>
                   </select>
                 </div>
@@ -528,14 +713,22 @@ export default function CustomersPage() {
               )}
 
               {/* Actions */}
-              <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+              <button
+                className="btn btn-primary btn-full"
+                style={{ marginTop: 12 }}
+                onClick={handleSaveAsInvoice}
+                disabled={invItems.length === 0 || savingInv || supplierId == null}
+              >
+                {savingInv ? 'Saving…' : `💾 Save Invoice — ${invoiceCust.name.split(' ')[0]} pays later`}
+              </button>
+              <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
                 <button
-                  className="btn btn-primary"
+                  className="btn btn-secondary"
                   style={{ flex: 1 }}
                   onClick={handlePrint}
                   disabled={invItems.length === 0}
                 >
-                  🖨️ Print Invoice
+                  🖨️ Print
                 </button>
                 <button
                   className="btn btn-ghost"
@@ -543,9 +736,114 @@ export default function CustomersPage() {
                   onClick={handleSaveAsOrder}
                   disabled={invItems.length === 0 || savingInv}
                 >
-                  {savingInv ? '…' : '✅ Save as Order'}
+                  {savingInv ? '…' : '✅ Paid now (save order)'}
                 </button>
               </div>
+
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Ledger Modal — invoices + payments for one customer ── */}
+      {ledgerCust && (
+        <div className="modal-overlay" onClick={() => setLedgerCust(null)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span>📒 {ledgerCust.name} — Ledger</span>
+              <button className="modal-close" onClick={() => setLedgerCust(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+
+              {/* Summary */}
+              <div className="inv-totals-box" style={{ marginBottom: 14 }}>
+                <div className="inv-total-row">
+                  <span>Total invoiced</span>
+                  <span>${ledgerTotals.invoiced.toFixed(2)}</span>
+                </div>
+                <div className="inv-total-row" style={{ color: '#059669' }}>
+                  <span>Total paid</span>
+                  <span>−${ledgerTotals.paid.toFixed(2)}</span>
+                </div>
+                <div className="inv-total-row final" style={ledgerTotals.balance > 0.005 ? { color: '#dc2626' } : undefined}>
+                  <span>Still owed</span>
+                  <span>${ledgerTotals.balance.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {ledgerInvoices.map(inv => (
+                <div key={inv.id} style={{ border: '1px solid var(--border)', borderRadius: 12, padding: '10px 12px', marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '.85rem' }}>{inv.id}</div>
+                      <div style={{ fontSize: '.74rem', color: 'var(--text-muted)' }}>
+                        {fmtDate(inv.createdAt)} · {inv.items.reduce((n, i) => n + i.qty, 0)} item{inv.items.reduce((n, i) => n + i.qty, 0) !== 1 ? 's' : ''}
+                      </div>
+                    </div>
+                    <span style={{
+                      fontSize: '.7rem', fontWeight: 800, padding: '2px 10px', borderRadius: 99,
+                      background: inv.status === 'paid' ? '#d1fae5' : inv.status === 'partial' ? '#fef3c7' : '#fee2e2',
+                      color:      inv.status === 'paid' ? '#059669' : inv.status === 'partial' ? '#d97706' : '#dc2626',
+                    }}>
+                      {inv.status === 'paid' ? '✓ PAID' : inv.status === 'partial' ? 'PARTIAL' : 'UNPAID'}
+                    </span>
+                  </div>
+
+                  {/* Items snapshot */}
+                  <div style={{ margin: '8px 0', fontSize: '.78rem', color: 'var(--text-muted)' }}>
+                    {inv.items.map(i => `${i.name} ×${i.qty}`).join(' · ')}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.82rem', fontWeight: 600 }}>
+                    <span>Total ${inv.total.toFixed(2)}</span>
+                    <span style={{ color: '#059669' }}>Paid ${inv.paidTotal.toFixed(2)}</span>
+                    <span style={{ color: inv.balance > 0.005 ? '#dc2626' : '#059669' }}>Owes ${inv.balance.toFixed(2)}</span>
+                  </div>
+
+                  {/* Payment history */}
+                  {inv.payments.length > 0 && (
+                    <div style={{ marginTop: 8, borderTop: '1px dashed var(--border)', paddingTop: 6 }}>
+                      {inv.payments.map(p => (
+                        <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.75rem', color: 'var(--text-muted)', padding: '2px 0' }}>
+                          <span>{fmtDate(p.paidAt)} · {PAY_LABEL[p.method] ?? p.method}</span>
+                          <span style={{ fontWeight: 700, color: '#059669' }}>+${p.amount.toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Record payment */}
+                  {inv.balance > 0.005 && (
+                    payingInvId === inv.id ? (
+                      <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <input
+                          className="form-input" type="number" min="0.01" step="0.01"
+                          placeholder={`Max $${inv.balance.toFixed(2)}`}
+                          value={payAmount} onChange={e => setPayAmount(e.target.value)}
+                          style={{ flex: '1 1 90px' }}
+                        />
+                        <select className="form-input" value={payMethod} onChange={e => setPayMethod(e.target.value)} style={{ flex: '0 0 110px' }}>
+                          <option value="cash">💵 Cash</option>
+                          <option value="waafi">📱 Waafi</option>
+                          <option value="card">💳 Card</option>
+                        </select>
+                        <button className="btn btn-primary btn-sm" disabled={savingPay} onClick={() => handleRecordPayment(inv)}>
+                          {savingPay ? '…' : 'Save'}
+                        </button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => setPayingInvId(null)}>✕</button>
+                      </div>
+                    ) : (
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        style={{ marginTop: 8, width: '100%' }}
+                        onClick={() => { setPayingInvId(inv.id); setPayAmount(inv.balance.toFixed(2)); setPayMethod('cash'); }}
+                      >
+                        💰 Record payment
+                      </button>
+                    )
+                  )}
+                </div>
+              ))}
 
             </div>
           </div>

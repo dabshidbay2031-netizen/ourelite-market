@@ -101,6 +101,8 @@ export interface Order {
   total:         number;
   paymentMethod: string;
   status:        string;
+  /** The store that SOLD this order (v3.7 attribution); null on legacy orders. */
+  supplierId?:   number | null;
   createdAt:     string;
 }
 

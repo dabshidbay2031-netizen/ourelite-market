@@ -1,35 +1,25 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Header from '@/components/Header';
-import { Link } from '@/lib/hashRouter';
-import { useI18n }   from '@/context/I18nContext';
-import { toLangCode } from '@/lib/i18n';
+import { Link, useRouter } from '@/lib/hashRouter';
+import { useAuth } from '@/context/AuthContext';
+import { useApp } from '@/context/AppContext';
+import { isPushSupported, subscribeToPush, unsubscribeFromPush } from '@/lib/push';
 
 const STORAGE_KEY = 'mogarenta_settings';
 
+/* Platform-wide fixed values — the app trades in USD and speaks English;
+   these are shown as information, not choices. */
 const DEFAULTS = {
-  storeName:           'Mogarenta Store',
-  currency:            'USD',
-  language:            'English',
   theme:               'light' as 'light' | 'dark',
-  // Appearance
-  compactView:         false,
-  showPrices:          true,
-  productsPerPage:     '20',
-  // Notifications
-  stockAlerts:         true,
-  orderAlerts:         true,
-  paymentAlerts:       true,
-  supplierAlerts:      false,
-  // POS
-  defaultPayment:      'waafi',
-  requireCustomerName: true,
+  // POS (consumed by the register — see PosView)
+  defaultPayment:      'cash',
+  requireCustomerName: false,
   autoPrint:           false,
 };
 
 type Settings = typeof DEFAULTS;
-type BoolKey = { [K in keyof Settings]: Settings[K] extends boolean ? K : never }[keyof Settings];
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -43,16 +33,44 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 }
 
 export default function SettingsPage() {
-  const { setLang } = useI18n();
-  const [s, setS]       = useState<Settings>(DEFAULTS);
-  const [saved, setSaved] = useState(false);
+  const router = useRouter();
+  const { user, accountType, currentSupplier, signOut } = useAuth();
+  const { toast } = useApp();
+  const [s, setS] = useState<Settings>(DEFAULTS);
+  const loadedRef = useRef(false);
+
+  /* Push notification state */
+  const [pushState, setPushState] = useState<'unsupported' | 'off' | 'on' | 'busy'>('unsupported');
 
   /* Load from localStorage */
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) setS({ ...DEFAULTS, ...JSON.parse(raw) });
+      if (raw) {
+        const saved = JSON.parse(raw);
+        setS({
+          theme:               saved.theme === 'dark' ? 'dark' : 'light',
+          defaultPayment:      ['cash', 'waafi', 'card'].includes(saved.defaultPayment) ? saved.defaultPayment : 'cash',
+          requireCustomerName: !!saved.requireCustomerName,
+          autoPrint:           !!saved.autoPrint,
+        });
+      }
     } catch {}
+    loadedRef.current = true;
+  }, []);
+
+  /* Detect current push subscription */
+  useEffect(() => {
+    if (!isPushSupported()) { setPushState('unsupported'); return; }
+    (async () => {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration('/sw.js');
+        const sub = await reg?.pushManager.getSubscription();
+        setPushState(sub && Notification.permission === 'granted' ? 'on' : 'off');
+      } catch {
+        setPushState('off');
+      }
+    })();
   }, []);
 
   /* Apply theme to <html> */
@@ -64,26 +82,51 @@ export default function SettingsPage() {
     }
   }, [s.theme]);
 
+  /* Every change saves itself — no "Save" button to forget. */
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    try {
+      const raw  = localStorage.getItem(STORAGE_KEY);
+      const prev = raw ? JSON.parse(raw) : {};
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...prev, ...s }));
+    } catch {}
+  }, [s]);
+
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) =>
     setS(prev => ({ ...prev, [k]: v }));
 
-  const setB = (k: BoolKey, v: boolean) =>
-    setS(prev => ({ ...prev, [k]: v }));
+  async function togglePush() {
+    if (pushState === 'unsupported' || pushState === 'busy') return;
+    const turnOn = pushState === 'off';
+    setPushState('busy');
+    if (turnOn) {
+      const ok = await subscribeToPush();
+      setPushState(ok ? 'on' : 'off');
+      toast(ok ? 'Push notifications enabled ✓' : 'Could not enable — allow notifications in your browser', ok ? 'success' : 'error');
+    } else {
+      await unsubscribeFromPush();
+      setPushState('off');
+      toast('Push notifications disabled', 'default');
+    }
+  }
 
-  const handleSave = () => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-    // Apply language change immediately
-    setLang(toLangCode(s.language));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2200);
-  };
+  function clearCachedData() {
+    try {
+      ['mg_c_products', 'mg_c_suppliers', 'mg_c_notifications'].forEach(k => localStorage.removeItem(k));
+    } catch {}
+    toast('Cached data cleared — reloading…', 'success');
+    setTimeout(() => window.location.reload(), 600);
+  }
 
   const handleReset = () => {
     if (!confirm('Reset all settings to defaults?')) return;
     localStorage.removeItem(STORAGE_KEY);
     document.documentElement.removeAttribute('data-theme');
     setS(DEFAULTS);
+    toast('Settings reset', 'default');
   };
+
+  const isSeller = accountType === 'business' || accountType === 'supplier';
 
   return (
     <div className="page-anim">
@@ -91,57 +134,66 @@ export default function SettingsPage() {
 
       <div className="page-title-bar">
         <span className="page-title">⚙️ Settings</span>
-        <button
-          className={`btn btn-sm ${saved ? 'btn-secondary' : 'btn-primary'}`}
-          onClick={handleSave}
-        >
-          {saved ? '✓ Saved!' : 'Save Changes'}
-        </button>
       </div>
-      <p className="page-subtitle">Customize your store experience</p>
+      <p className="page-subtitle">Changes are saved automatically</p>
 
-      {/* ── Store ─────────────────────────────────────── */}
+      {/* ── Account ───────────────────────────────────── */}
       <div className="sett-section">
-        <div className="sett-section-title">🏪 Store</div>
+        <div className="sett-section-title">👤 Account</div>
         <div className="sett-card">
-          <div className="sett-row">
-            <div className="sett-row-info">
-              <div className="sett-row-label">Store Name</div>
-              <div className="sett-row-sub">Shown in receipts and headers</div>
+          {user ? (
+            <>
+              <div className="sett-row">
+                <div className="sett-row-info">
+                  <div className="sett-row-label">Signed in as</div>
+                  <div className="sett-row-sub">{user.email ?? user.displayName ?? user.id}</div>
+                </div>
+                <span className="sett-info-val">
+                  {accountType === 'business' ? '🏪 Business'
+                    : accountType === 'supplier' ? '🏭 Supplier'
+                    : accountType === 'agent' ? '📋 Agent'
+                    : '👤 Customer'}
+                </span>
+              </div>
+              {currentSupplier && (
+                <div className="sett-row">
+                  <div className="sett-row-info">
+                    <div className="sett-row-label">Store</div>
+                    <div className="sett-row-sub">Shown on receipts and your storefront</div>
+                  </div>
+                  <span className="sett-info-val">{currentSupplier.name}</span>
+                </div>
+              )}
+              <div className="sett-row">
+                <div className="sett-row-info">
+                  <div className="sett-row-label">Profile</div>
+                  <div className="sett-row-sub">Name, photo{isSeller ? ', store details, logo' : ''}</div>
+                </div>
+                <button className="btn btn-secondary btn-sm" onClick={() => router.push('/profile')}>Open</button>
+              </div>
+              <div className="sett-row">
+                <div className="sett-row-info">
+                  <div className="sett-row-label">Sign Out</div>
+                  <div className="sett-row-sub">Log out of this device</div>
+                </div>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  style={{ color: 'var(--danger)', border: '1.5px solid var(--danger)' }}
+                  onClick={async () => { await signOut(); router.push('/'); }}
+                >
+                  Sign Out
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="sett-row">
+              <div className="sett-row-info">
+                <div className="sett-row-label">Not signed in</div>
+                <div className="sett-row-sub">Sign in to sync orders, chat and wishlist</div>
+              </div>
+              <button className="btn btn-primary btn-sm" onClick={() => router.push('/auth/login')}>Sign In</button>
             </div>
-            <input
-              className="sett-input"
-              value={s.storeName}
-              onChange={e => set('storeName', e.target.value)}
-              placeholder="My Store"
-            />
-          </div>
-          <div className="sett-row">
-            <div className="sett-row-info">
-              <div className="sett-row-label">Currency</div>
-              <div className="sett-row-sub">Used across the app</div>
-            </div>
-            <select className="sett-input" value={s.currency} onChange={e => set('currency', e.target.value)}>
-              <option value="USD">$ USD — Dollar</option>
-              <option value="EUR">€ EUR — Euro</option>
-              <option value="GBP">£ GBP — Pound</option>
-              <option value="SOS">SOS — Somali Shilling</option>
-              <option value="AED">AED — UAE Dirham</option>
-              <option value="SAR">SAR — Saudi Riyal</option>
-            </select>
-          </div>
-          <div className="sett-row">
-            <div className="sett-row-info">
-              <div className="sett-row-label">Language</div>
-              <div className="sett-row-sub">Interface language</div>
-            </div>
-            <select className="sett-input" value={s.language} onChange={e => set('language', e.target.value)}>
-              <option>English</option>
-              <option>Somali</option>
-              <option>Arabic</option>
-              <option>French</option>
-            </select>
-          </div>
+          )}
         </div>
       </div>
 
@@ -149,7 +201,6 @@ export default function SettingsPage() {
       <div className="sett-section">
         <div className="sett-section-title">🎨 Appearance</div>
         <div className="sett-card">
-          {/* Theme toggle */}
           <div className="sett-row">
             <div className="sett-row-info">
               <div className="sett-row-label">Theme</div>
@@ -166,31 +217,19 @@ export default function SettingsPage() {
               >🌙 Dark</button>
             </div>
           </div>
-
           <div className="sett-row">
             <div className="sett-row-info">
-              <div className="sett-row-label">Compact View</div>
-              <div className="sett-row-sub">More products, less spacing</div>
+              <div className="sett-row-label">Currency</div>
+              <div className="sett-row-sub">All prices are in US Dollars</div>
             </div>
-            <Toggle checked={s.compactView} onChange={v => setB('compactView', v)} />
+            <span className="sett-info-val">$ USD</span>
           </div>
-
           <div className="sett-row">
             <div className="sett-row-info">
-              <div className="sett-row-label">Show Prices</div>
-              <div className="sett-row-sub">Display price tags on cards</div>
+              <div className="sett-row-label">Language</div>
+              <div className="sett-row-sub">Interface language</div>
             </div>
-            <Toggle checked={s.showPrices} onChange={v => setB('showPrices', v)} />
-          </div>
-
-          <div className="sett-row">
-            <div className="sett-row-info">
-              <div className="sett-row-label">Products Per Page</div>
-              <div className="sett-row-sub">Items loaded at once</div>
-            </div>
-            <select className="sett-input" value={s.productsPerPage} onChange={e => set('productsPerPage', e.target.value)}>
-              {['10','20','30','50'].map(n => <option key={n} value={n}>{n}</option>)}
-            </select>
+            <span className="sett-info-val">English</span>
           </div>
         </div>
       </div>
@@ -199,84 +238,86 @@ export default function SettingsPage() {
       <div className="sett-section">
         <div className="sett-section-title">🔔 Notifications</div>
         <div className="sett-card">
-          {([
-            { key: 'stockAlerts'   as BoolKey, label: 'Stock Alerts',    sub: 'Notify when stock runs low' },
-            { key: 'orderAlerts'   as BoolKey, label: 'Order Alerts',    sub: 'New order notifications' },
-            { key: 'paymentAlerts' as BoolKey, label: 'Payment Alerts',  sub: 'Payment confirmations' },
-            { key: 'supplierAlerts'as BoolKey, label: 'Supplier Alerts', sub: 'Deals and supplier updates' },
-          ] as { key: BoolKey; label: string; sub: string }[]).map(({ key, label, sub }) => (
-            <div key={key} className="sett-row">
-              <div className="sett-row-info">
-                <div className="sett-row-label">{label}</div>
-                <div className="sett-row-sub">{sub}</div>
+          <div className="sett-row">
+            <div className="sett-row-info">
+              <div className="sett-row-label">Push Notifications</div>
+              <div className="sett-row-sub">
+                {pushState === 'unsupported'
+                  ? 'Not supported by this browser'
+                  : 'Order updates & chat messages, even when the app is closed'}
               </div>
-              <Toggle checked={s[key] as boolean} onChange={v => setB(key, v)} />
             </div>
-          ))}
+            {pushState === 'unsupported' ? (
+              <span className="sett-info-val">—</span>
+            ) : (
+              <button
+                className={`btn btn-sm ${pushState === 'on' ? 'btn-secondary' : 'btn-primary'}`}
+                onClick={togglePush}
+                disabled={pushState === 'busy' || !user}
+              >
+                {pushState === 'busy' ? '…' : pushState === 'on' ? '✓ On — turn off' : 'Enable'}
+              </button>
+            )}
+          </div>
+          <div className="sett-row">
+            <div className="sett-row-info">
+              <div className="sett-row-label">In-App Notifications</div>
+              <div className="sett-row-sub">Orders, payments and announcements</div>
+            </div>
+            <button className="btn btn-secondary btn-sm" onClick={() => router.push('/notifications')}>View</button>
+          </div>
         </div>
       </div>
 
-      {/* ── Point of Sale ─────────────────────────────── */}
+      {/* ── Point of Sale (sellers only) ───────────────── */}
+      {isSeller && (
+        <div className="sett-section">
+          <div className="sett-section-title">🖥️ Point of Sale</div>
+          <div className="sett-card">
+            <div className="sett-row">
+              <div className="sett-row-info">
+                <div className="sett-row-label">Default Payment</div>
+                <div className="sett-row-sub">Pre-selected at the register</div>
+              </div>
+              <select className="sett-input" value={s.defaultPayment} onChange={e => set('defaultPayment', e.target.value)}>
+                <option value="cash">💵 Cash</option>
+                <option value="waafi">📱 Waafi</option>
+                <option value="card">💳 Card</option>
+              </select>
+            </div>
+            <div className="sett-row">
+              <div className="sett-row-info">
+                <div className="sett-row-label">Require Customer Name</div>
+                <div className="sett-row-sub">The register won't charge without a name</div>
+              </div>
+              <Toggle checked={s.requireCustomerName} onChange={v => set('requireCustomerName', v)} />
+            </div>
+            <div className="sett-row">
+              <div className="sett-row-info">
+                <div className="sett-row-label">Auto-Print Receipt</div>
+                <div className="sett-row-sub">Opens the print dialog after every sale</div>
+              </div>
+              <Toggle checked={s.autoPrint} onChange={v => set('autoPrint', v)} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Data ──────────────────────────────────────── */}
       <div className="sett-section">
-        <div className="sett-section-title">🖥️ Point of Sale</div>
+        <div className="sett-section-title">🧹 Data</div>
         <div className="sett-card">
           <div className="sett-row">
             <div className="sett-row-info">
-              <div className="sett-row-label">Default Payment</div>
-              <div className="sett-row-sub">Pre-selected at checkout</div>
+              <div className="sett-row-label">Refresh Cached Data</div>
+              <div className="sett-row-sub">Clear the local product/store cache and reload</div>
             </div>
-            <select className="sett-input" value={s.defaultPayment} onChange={e => set('defaultPayment', e.target.value)}>
-              <option value="waafi">📱 Waafi</option>
-              <option value="cash">💵 Cash</option>
-              <option value="card">💳 Card</option>
-            </select>
+            <button className="btn btn-secondary btn-sm" onClick={clearCachedData}>Clear</button>
           </div>
           <div className="sett-row">
             <div className="sett-row-info">
-              <div className="sett-row-label">Require Customer Name</div>
-              <div className="sett-row-sub">Mandatory at checkout</div>
-            </div>
-            <Toggle checked={s.requireCustomerName} onChange={v => setB('requireCustomerName', v)} />
-          </div>
-          <div className="sett-row">
-            <div className="sett-row-info">
-              <div className="sett-row-label">Auto-Print Receipt</div>
-              <div className="sett-row-sub">Print after every order</div>
-            </div>
-            <Toggle checked={s.autoPrint} onChange={v => setB('autoPrint', v)} />
-          </div>
-        </div>
-      </div>
-
-      {/* ── About ─────────────────────────────────────── */}
-      <div className="sett-section">
-        <div className="sett-section-title">ℹ️ About</div>
-        <div className="sett-card">
-          <div className="sett-row">
-            <div className="sett-row-info">
-              <div className="sett-row-label">Version</div>
-              <div className="sett-row-sub">Current app version</div>
-            </div>
-            <span className="sett-info-val">1.0.0</span>
-          </div>
-          <div className="sett-row">
-            <div className="sett-row-info">
-              <div className="sett-row-label">Built with</div>
-              <div className="sett-row-sub">Tech stack</div>
-            </div>
-            <span className="sett-info-val">Next.js 14</span>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Danger Zone ───────────────────────────────── */}
-      <div className="sett-section" style={{ marginBottom: 80 }}>
-        <div className="sett-section-title" style={{ color: 'var(--danger)' }}>⚠️ Reset</div>
-        <div className="sett-card">
-          <div className="sett-row">
-            <div className="sett-row-info">
-              <div className="sett-row-label">Reset to Defaults</div>
-              <div className="sett-row-sub">Clear all saved preferences</div>
+              <div className="sett-row-label">Reset Settings</div>
+              <div className="sett-row-sub">Back to defaults (theme, POS options)</div>
             </div>
             <button
               className="btn btn-ghost btn-sm"
@@ -285,6 +326,20 @@ export default function SettingsPage() {
             >
               Reset
             </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── About ─────────────────────────────────────── */}
+      <div className="sett-section" style={{ marginBottom: 80 }}>
+        <div className="sett-section-title">ℹ️ About</div>
+        <div className="sett-card">
+          <div className="sett-row">
+            <div className="sett-row-info">
+              <div className="sett-row-label">Version</div>
+              <div className="sett-row-sub">Current app version</div>
+            </div>
+            <span className="sett-info-val">1.0.0</span>
           </div>
         </div>
       </div>

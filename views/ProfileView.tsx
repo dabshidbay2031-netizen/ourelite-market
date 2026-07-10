@@ -316,10 +316,15 @@ export default function ProfilePage() {
       .then(d => setVerifRequest(Array.isArray(d) && d[0] ? d[0] : null))
       .catch(() => setVerifRequest(null));
     // Load orders for the Total Shop Revenue stat (Reports tab + hero stat).
-    fetch(`/api/orders?supplierId=${currentSupplier.id}`, { cache: 'no-store' })
-      .then(r => r.json())
-      .then(d => { setBizOrders(Array.isArray(d) ? d : []); setBizOrdersLoaded(true); })
-      .catch(() => setBizOrdersLoaded(true));
+    // The endpoint carries customer PII → needs the caller's JWT.
+    (async () => {
+      try {
+        const r = await fetch(`/api/orders?supplierId=${currentSupplier.id}`, { cache: 'no-store', headers: await authHeaders() });
+        const d = await r.json();
+        setBizOrders(Array.isArray(d) ? d : []);
+      } catch { /* keep empty */ }
+      setBizOrdersLoaded(true);
+    })();
   }, [currentSupplier]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // This business's own line-item share of an order (owned + claimed

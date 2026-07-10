@@ -16,12 +16,17 @@ interface ReceiptProps {
   subtotal:      number;
   discount:      number;
   total:         number;
+  /** The order's date — pass when REPRINTING so the receipt shows when the
+   *  sale happened, not when the reprint button was clicked. */
+  date?:         string | Date;
+  /** Open the print dialog automatically (Settings → POS → Auto-Print). */
+  autoPrint?:    boolean;
   onClose:       () => void;
 }
 
 export default function Receipt({
   orderId, businessName, businessIcon, customerName,
-  paymentMethod, items, products, subtotal, discount, total, onClose,
+  paymentMethod, items, products, subtotal, discount, total, date, autoPrint, onClose,
 }: ReceiptProps) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -41,6 +46,16 @@ export default function Receipt({
       .catch(() => { /* receipt still works without the QR */ });
     return () => { cancelled = true; };
   }, [orderUrl]);
+
+  // Auto-print (POS setting): give the QR a beat to render, then print once.
+  const printedRef = useRef(false);
+  useEffect(() => {
+    if (!autoPrint || printedRef.current || !qrDataUrl) return;
+    printedRef.current = true;
+    const t = setTimeout(() => handlePrint(), 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoPrint, qrDataUrl]);
 
   function handlePrint() {
     const content = ref.current?.innerHTML ?? '';
@@ -88,13 +103,15 @@ export default function Receipt({
     win.document.close();
   }
 
-  const now = new Date();
+  const now = date ? new Date(date) : new Date();
   const dateStr = now.toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric' });
   const timeStr = now.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' });
   const pmLabel = paymentMethod === 'waafi' ? 'Waafi Pay'
     : paymentMethod === 'cash' ? 'Cash'
     : paymentMethod === 'sifalo' ? 'Sifalo Pay'
-    : 'Card';
+    : paymentMethod === 'invoice' ? 'Invoice (pay later)'
+    : paymentMethod === 'card' ? 'Card'
+    : paymentMethod;
 
   return (
     <>

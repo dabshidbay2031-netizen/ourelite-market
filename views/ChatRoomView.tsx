@@ -6,7 +6,18 @@ import { useAuth } from '@/context/AuthContext';
 import { getSupabase } from '@/lib/supabase';
 import { authHeaders } from '@/lib/clientAuth';
 import { CATEGORIES } from '@/lib/data';
+import StoreAvatar from '@/components/StoreAvatar';
 import type { ChatUser, Message } from '@/lib/types';
+
+/** A text message whose whole content is just an image URL should render as
+ *  the photo, not as a raw link (covers uploads saved without message_type). */
+function contentAsImageUrl(content: string | null): string | null {
+  const s = (content ?? '').trim();
+  if (!/^https?:\/\/\S+$/i.test(s)) return null;
+  if (/\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(s)) return s;
+  if (s.includes('/storage/v1/object/')) return s;
+  return null;
+}
 
 /* ─── Profile modal ──────────────────────────────── */
 function ProfileModal({ user: cu, onClose }: { user: ChatUser; onClose: () => void }) {
@@ -19,7 +30,7 @@ function ProfileModal({ user: cu, onClose }: { user: ChatUser; onClose: () => vo
         </div>
         <div className="modal-body">
           <div className="chat-profile-card">
-            <div className="chat-profile-avatar">{cu.avatar}</div>
+            <div className="chat-profile-avatar"><StoreAvatar value={cu.avatar} fallback="👤" alt={`${cu.name} photo`} /></div>
             <div>
               <div className="chat-profile-name">
                 {cu.name}
@@ -309,7 +320,7 @@ export default function ChatRoomPage() {
 
         <button className="chat-header-user" onClick={() => setShowProfile(true)}>
           <div className="chat-room-avatar">
-            <span>{otherUser?.avatar ?? '👤'}</span>
+            <StoreAvatar value={otherUser?.avatar} fallback="👤" alt="Profile photo" />
             {otherUser?.verified && <span className="chat-verified-dot">✓</span>}
           </div>
           <div className="chat-header-info">
@@ -336,7 +347,9 @@ export default function ChatRoomPage() {
           </div>
         ) : messages.length === 0 ? (
           <div className="chat-empty-state">
-            <div style={{ fontSize:'3rem', marginBottom:12 }}>{otherUser?.avatar ?? '💬'}</div>
+            <div style={{ fontSize:'3rem', marginBottom:12, width:72, height:72, borderRadius:'50%', overflow:'hidden', display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <StoreAvatar value={otherUser?.avatar} fallback="💬" alt="Profile photo" />
+            </div>
             <div style={{ fontWeight:700, marginBottom:6 }}>
               Start a conversation with {otherUser?.name ?? 'this person'}
             </div>
@@ -361,20 +374,23 @@ export default function ChatRoomPage() {
                   {/* Avatar (other user only) */}
                   {!isMe && (
                     <button className="chat-msg-avatar" onClick={() => setShowProfile(true)}>
-                      {otherUser?.avatar ?? '👤'}
+                      <StoreAvatar value={otherUser?.avatar} fallback="👤" alt="Profile photo" />
                     </button>
                   )}
 
+                  {/* A photo message renders ONLY the photo — never the raw
+                      storage URL (whether it landed in imageUrl or content). */}
+                  {(() => { const img = msg.imageUrl ?? contentAsImageUrl(msg.content); return (
                   <div className={`chat-bubble${isMe ? ' me' : ' them'}`}>
-                    {msg.messageType === 'image' && msg.imageUrl ? (
+                    {img ? (
                       <button
                         className="chat-bubble-img-btn"
-                        onClick={() => setLightboxImg(msg.imageUrl!)}
+                        onClick={() => setLightboxImg(img)}
                         aria-label="View image"
                       >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
-                          src={msg.imageUrl}
+                          src={img}
                           alt="Sent image"
                           className="chat-bubble-img"
                           onError={e => { (e.target as HTMLImageElement).style.display='none'; }}
@@ -390,6 +406,7 @@ export default function ChatRoomPage() {
                       {isMe && !msg.readAt && !msg.id.startsWith('temp') && ' ✓'}
                     </span>
                   </div>
+                  ); })()}
                 </div>
               </div>
             );

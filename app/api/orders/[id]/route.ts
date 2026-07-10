@@ -83,15 +83,85 @@ function mapOrder(o: Record<string, unknown>) {
     notes:         o.notes          ?? null,
     sessionId:     o.session_id     ?? null,
     cashierName:   o.cashier_name   ?? null,
+    supplierId:    o.supplier_id    ?? null,
     createdAt:     o.created_at,
   };
 }
 
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+/** "Ahmed Hassan" → "A." — enough to recognize yourself, nothing to harvest. */
+function maskName(name: unknown): string {
+  const s = String(name ?? '').trim();
+  return s ? `${s[0].toUpperCase()}.` : '';
+}
+/** "+252611234567" → "•••••67" */
+function maskPhone(phone: unknown): string {
+  const s = String(phone ?? '').trim();
+  return s.length > 2 ? `•••••${s.slice(-2)}` : '';
+}
+
+/**
+ * True when the caller may see the order's customer PII: the buyer who
+ * placed it, a store that sells something in it, or a platform admin.
+ * A receipt QR is public — anyone scanning it gets the order status and
+ * totals, but NOT the customer's name and phone number.
+ */
+async function canSeeCustomerPII(req: Request, order: Record<string, unknown>): Promise<boolean> {
+  const user = await getAuthUser(req);
+  if (!user) return false;
+  if (order.user_id != null && String(order.user_id) === user.id) return true;
+  const sb = getSupabaseAdmin();
+  const { data: admin } = await sb.from('admins').select('user_id').eq('user_id', user.id).maybeSingle();
+  if (admin) return true;
+  const { data: sup } = await sb.from('suppliers').select('id').eq('auth_user_id', user.id).maybeSingle();
+  if (!sup) return false;
+  const supplierId = sup.id as number;
+  if (order.supplier_id != null && Number(order.supplier_id) === supplierId) return true;
+  const itemIds = (Array.isArray(order.items) ? order.items as Array<{ id: number }> : [])
+    .map(i => Number(i.id)).filter(n => Number.isInteger(n) && n > 0);
+  if (itemIds.length === 0) return false;
+  const [{ data: owned }, { data: claimed }] = await Promise.all([
+    sb.from('products').select('id').eq('supplier_id', supplierId).in('id', itemIds),
+    sb.from('business_products').select('product_id').eq('supplier_id', supplierId).in('product_id', itemIds),
+  ]);
+  return !!((owned && owned.length) || (claimed && claimed.length));
+}
+
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { data, error } = await getSupabaseAdmin()
     .from('orders').select('*').eq('id', (await params).id).single();
   if (error || !data) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  return NextResponse.json(mapOrder(data));
+
+  const order = mapOrder(data);
+  if (await canSeeCustomerPII(req, data as Record<string, unknown>)) {
+    return NextResponse.json(order);
+  }
+  // Public view (scanned receipt QR): status + totals stay, PII is masked.
+  return NextResponse.json({
+    ...order,
+    customerName:  maskName(order.customerName),
+    customerPhone: maskPhone(order.customerPhone),
+    masked:        true,
+  });
+}
+
+/* Fulfillment pipeline rank — an order may only move FORWARD through it.
+   Terminal exits (cancelled/refunded/deleted) are allowed from any live
+   stage, but a completed order can't go back to processing, a shipped one
+   can't become pending again, and a terminal order can't be revived. */
+const STAGE_RANK: Record<string, number> = {
+  bulk_pending: 0, pending: 0, processing: 1, shipped: 2, completed: 3,
+};
+const TERMINAL = new Set(['cancelled', 'refunded', 'deleted']);
+
+function forwardOnlyViolation(current: string, next: string): string | null {
+  if (current === next) return null;
+  if (TERMINAL.has(current)) return `Order is already ${current} and can't change`;
+  if (TERMINAL.has(next)) return null;              // live → cancel/refund is fine
+  const from = STAGE_RANK[current];
+  const to   = STAGE_RANK[next];
+  if (from === undefined || to === undefined) return null; // unknown label — don't block
+  if (to < from) return `Order can't move back from ${current} to ${next}`;
+  return null;
 }
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -101,7 +171,13 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   const body = await req.json();
   const updates: Record<string, unknown> = {};
-  if (body.status        !== undefined) updates.status         = body.status;
+  if (body.status !== undefined) {
+    const { data: cur } = await getSupabaseAdmin()
+      .from('orders').select('status').eq('id', orderId).maybeSingle();
+    const violation = cur ? forwardOnlyViolation(String(cur.status ?? 'pending'), String(body.status)) : null;
+    if (violation) return NextResponse.json({ error: violation }, { status: 409 });
+    updates.status = body.status;
+  }
   if (body.customerName  !== undefined) updates.customer_name  = body.customerName;
   if (body.customerPhone !== undefined) updates.customer_phone = body.customerPhone;
   // Only include notes if it exists (old schema may not have it)
