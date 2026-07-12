@@ -27,7 +27,7 @@ describe('cashierCanAccess', () => {
     expect(cashierCanAccess('/staff', [])).toBe(false);
   });
 
-  it.each(['/', '/search', '/product/3', '/chat', '/chat/1', '/notifications', '/auth/login', '/profile'])(
+  it.each(['/', '/search', '/product/3', '/notifications', '/auth/login', '/profile'])(
     '%s is always reachable, regardless of privileges', (path) => {
       expect(cashierCanAccess(path, [])).toBe(true);
     });
@@ -45,6 +45,19 @@ describe('cashierCanAccess', () => {
     expect(cashierCanAccess('/customers', ['customers'])).toBe(true);
     expect(cashierCanAccess('/suppliers', ['suppliers'])).toBe(true);
     expect(cashierCanAccess('/settings', ['settings'])).toBe(true);
+  });
+
+  it('a deactivated cashier cannot access business routes even if privileges are present', () => {
+    expect(cashierCanAccess('/pos', ['pos'], false)).toBe(false);
+    expect(cashierCanAccess('/orders', ['orders'], false)).toBe(false);
+    expect(cashierCanAccess('/search', ['pos'], false)).toBe(true);
+  });
+
+  it('chat access is gated behind a dedicated chat privilege', () => {
+    expect(cashierCanAccess('/chat', [])).toBe(false);
+    expect(cashierCanAccess('/chat/123', [])).toBe(false);
+    expect(cashierCanAccess('/chat', ['chat'])).toBe(true);
+    expect(cashierCanAccess('/chat/123', ['chat'])).toBe(true);
   });
 
   it('the "dashboard" privilege maps to the per-business dashboard, not the admin-only global one', () => {

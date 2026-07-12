@@ -1,6 +1,6 @@
 # Mogarenta — Manual QA Test Plan
 
-**Version:** v3.2 (updated 2026-06-16)  
+**Version:** v3.7 (updated 2026-07-11 — sections 19–25 cover the v3.7 release)  
 **App URL (dev):** `http://localhost:3000`  
 **Supabase project:** `knnrmdkzoicjuuaaownb`
 
@@ -324,6 +324,76 @@ Run these checks if any migration is uncertain:
 
 ---
 
+## 19. Reviews — pagination, badge & store attribution (v3.7)
+
+| # | Steps | Expected |
+|---|---|---|
+| 19.1 | Open a product with 6+ reviews | ✅ Only the 2 latest reviews show; button reads **Show more (+3 of N)** |
+| 19.2 | Tap **Show more** twice | ✅ +3 reviews per tap; button disappears when all are visible |
+| 19.3 | Submit a review (star + comment) | ✅ "✓ You reviewed this product" badge appears, then hides itself after ~4 s |
+| 19.4 | Reload the same product page | ✅ No badge, no write box (already reviewed) — page stays clean |
+| 19.5 | Review a product from a storefront URL (`/#/store-slug/123`) | ✅ THAT store's profile rating/review count updates (not the wholesaler's) |
+| 19.6 | Check the store profile after several reviews | ✅ Rating = average of its attributed reviews, count matches |
+
+## 20. Order privacy & receipt reprint (v3.7)
+
+| # | Steps | Expected |
+|---|---|---|
+| 20.1 | Scan a receipt QR while signed OUT | ✅ Order status/totals visible; customer shows as "A." / "•••••67"; Customer card says details are private |
+| 20.2 | Open the same order as the BUYER | ✅ Full name, phone, and notes visible |
+| 20.3 | Open it as the SELLING store | ✅ Full customer details visible |
+| 20.4 | Open it as a DIFFERENT business | ✅ Masked like a guest |
+| 20.5 | Orders page → any order → **🧾 Receipt** | ✅ Receipt opens with the ORDER's original date, store name + logo, and prints |
+
+## 21. Order status — forward only (v3.7)
+
+| # | Steps | Expected |
+|---|---|---|
+| 21.1 | Store tab → status dropdown on a *pending* order | ✅ Offers only Pending / Processing / Shipped / Completed / Cancelled |
+| 21.2 | Advance to *Shipped*, reopen the dropdown | ✅ Pending/Processing no longer offered |
+| 21.3 | Try PATCHing a backward status via API | ✅ 409 "can't move back" |
+| 21.4 | Cancel a live order | ✅ Allowed; a cancelled/refunded/deleted order can never change again |
+
+## 22. Dashboard attribution (v3.7 — needs migration_v3_7.sql)
+
+| # | Steps | Expected |
+|---|---|---|
+| 22.1 | Two stores claim the SAME catalog product; buy it from store A | ✅ Sale appears on A's dashboard/orders only — B sees nothing |
+| 22.2 | Sell via POS and via online checkout (cash + Sifalo) | ✅ Both order types count in My Dashboard revenue/orders |
+| 22.3 | Store with OWN products (not claims) | ✅ Their sales show on the dashboard too |
+| 22.4 | Old orders from before the migration | ✅ Still listed (item-match fallback) |
+
+## 23. Customer invoicing ledger (v3.7 — needs migration_v3_7.sql)
+
+| # | Steps | Expected |
+|---|---|---|
+| 23.1 | Customers → **📋 Invoice** | ✅ Product picker lists ONLY your store's products, at your claim prices |
+| 23.2 | **Save Invoice — pays later** | ✅ Order records the sale (stock moves); customer card shows "Owes $X" |
+| 23.3 | **📒 Ledger** on that customer | ✅ Total invoiced / paid / still owed; each invoice with status chip |
+| 23.4 | **💰 Record payment** (partial) | ✅ Balance drops, status → PARTIAL, payment listed with date + method |
+| 23.5 | Pay off the rest | ✅ Status → ✓ PAID, balance $0; paying again is blocked |
+| 23.6 | Try paying more than the balance | ✅ Rejected with the max amount |
+| 23.7 | POS → cart → Pay screen → **Invoice a customer** | ✅ Pick a name → sale completes as "Invoice (pay later)" + lands on their ledger |
+| 23.8 | Second business account opens Customers | ✅ Does NOT see the first store's customers or invoices |
+
+## 24. Settings & signup (v3.7)
+
+| # | Steps | Expected |
+|---|---|---|
+| 24.1 | Open Settings | ✅ Currency fixed "$ USD", Language fixed "English" — no dropdowns; changes auto-save |
+| 24.2 | As business: POS section | ✅ Default payment / require-name / auto-print all actually affect the register |
+| 24.3 | POS with auto-print ON | ✅ Print dialog opens by itself after a sale |
+| 24.4 | Sign up a NEW business (email flow) | ✅ Lands on the business UI immediately — no manual refresh needed |
+| 24.5 | Customer views a supplier page / directory | ✅ No MOQ / "Min order" anywhere; business accounts still see it |
+
+## 25. Avatars & chat photos (v3.7)
+
+| # | Steps | Expected |
+|---|---|---|
+| 25.1 | Chat with a store that uploaded a logo | ✅ Logo renders as an image in the list, room header, message rows, profile modal — never a raw URL |
+| 25.2 | Send a photo in chat | ✅ Bubble shows ONLY the photo; chat list previews it as "📷 Photo" |
+| 25.3 | Checkout a store with an uploaded logo | ✅ Banner + receipt show the logo image |
+
 ## Automated test coverage (`npm test`)
 
 Must be **100% green** before every release.
@@ -343,6 +413,16 @@ Must be **100% green** before every release.
 | Order soft-delete rule | `tests/order-rules.test.ts` | DELETE = status update, no hard-delete path |
 | Revenue exclusion | `tests/order-rules.test.ts` | deleted/cancelled/refunded never summed |
 | Receipt QR | `tests/receipt-qr.test.tsx` | encodes `/#/orders/:id` URL, prints, fails soft |
+| Order PII masking + forward-only status | `tests/order-pii-and-forward-status.test.ts` | QR-scan masking (buyer/seller/admin unmasked), status can only advance |
+| Order → store attribution | `tests/orders-attribution.test.ts` | attributed orders belong to ONE store; legacy rows item-match |
+| Invoice ledger API | `tests/invoices-api.test.ts` | tenant auth, server-side math, payment capping, unpaid→partial→paid |
+| Review store attribution | `tests/reviews-store-attribution.test.ts` | storefront credit, catalog-owner fallback, store rating rollup |
+| Customers per-business | `tests/customers-scoping.test.ts` | owner-only access, own+legacy rows, pre-migration fallback |
+| Reviews UI (pagination/badge) | `tests/reviews-pagination-ui.test.tsx` | latest 2 + "Show more (+3)", badge auto-hides, POST carries supplierId |
+| Settings rebuild | `tests/settings-usd-english.test.tsx` | fixed USD/English, POS section seller-only, auto-save to localStorage |
+| Receipt reprint / auto-print | `tests/receipt-reprint.test.tsx` | order-date reprint, "Invoice (pay later)" label, POS auto-print |
+
+Live end-to-end (dev server + real DB, self-cleaning): `node scripts/backend-test.mjs` (35 checks) and `node scripts/backend-test-2.mjs` (30 checks).
 
 ---
 

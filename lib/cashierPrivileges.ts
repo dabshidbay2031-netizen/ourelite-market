@@ -4,6 +4,7 @@ export const PRIVILEGES = [
   { key: 'inventory',      label: 'View Inventory', desc: 'See stock levels and products',     default: true  },
   { key: 'inventory_edit', label: 'Edit Inventory', desc: 'Adjust stock, add/edit products',  default: false },
   { key: 'customers',      label: 'Customers',      desc: 'View and manage customer list',     default: true  },
+  { key: 'chat',           label: 'Chat',           desc: 'View and reply to customer chats',  default: false },
   { key: 'dashboard',      label: 'Dashboard',      desc: 'View revenue analytics',            default: false },
   { key: 'suppliers',      label: 'Suppliers',      desc: 'View supplier directory',           default: false },
   { key: 'settings',       label: 'Settings',       desc: 'Change store settings',             default: false },
@@ -20,6 +21,7 @@ const PRIVILEGE_ROUTES: Record<string, string> = {
   inventory:      '/inventory',
   customers:      '/customers',
   dashboard:      '/my-dashboard',
+  chat:           '/chat',
   suppliers:      '/suppliers',
   settings:       '/settings',
   staff:          '/staff',
@@ -27,12 +29,15 @@ const PRIVILEGE_ROUTES: Record<string, string> = {
 
 // Routes every cashier can reach no matter what privileges they were granted —
 // general browsing/account pages, not store-operations data.
-const PUBLIC_PREFIXES = ['/', '/product/', '/search', '/chat', '/notifications', '/auth/', '/profile'];
+const PUBLIC_PREFIXES = ['/', '/product/', '/search', '/notifications', '/auth/', '/profile'];
 
-export function cashierCanAccess(path: string, privileges: string[]): boolean {
+export function cashierCanAccess(path: string, privileges: string[], isActive = true): boolean {
   // '/' must match the root EXACTLY — path.startsWith('/') is true for every
   // path, which previously made this check (and the whole privilege system) a no-op.
+  // Public pages stay reachable even for a DEACTIVATED cashier — deactivation
+  // revokes store operations, not general browsing.
   if (PUBLIC_PREFIXES.some(p => path === p || (p !== '/' && path.startsWith(p)))) return true;
+  if (!isActive) return false;
   for (const priv of privileges) {
     const base = PRIVILEGE_ROUTES[priv];
     if (base && (path === base || path.startsWith(base + '/'))) return true;

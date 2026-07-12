@@ -11,6 +11,7 @@ import { useMyProductIds } from '@/lib/useMyProductIds';
 import { CATEGORIES } from '@/lib/data';
 import { enqueueOrder, getQueue, dequeueOrder } from '@/lib/offlineQueue';
 import { useCashier } from '@/context/CashierContext';
+import { readReceiptAutoPrintSetting } from '@/lib/receiptSettings';
 import type { CartItem, Customer, PaymentMethod, PosSession } from '@/lib/types';
 
 /* Register behavior configured in Settings → Point of Sale. */
@@ -135,7 +136,13 @@ export default function POSPage() {
 
   /* ── Settings (Settings → Point of Sale) ─────────────────────── */
   const [posSettings, setPosSettings] = useState<PosSettings>({ defaultPayment: 'cash', requireCustomerName: false, autoPrint: false });
-  useEffect(() => { setPosSettings(readPosSettings()); }, []);
+  useEffect(() => {
+    const settings = readPosSettings();
+    setPosSettings(settings);
+    if (settings.autoPrint !== readReceiptAutoPrintSetting()) {
+      setPosSettings(current => ({ ...current, autoPrint: readReceiptAutoPrintSetting() }));
+    }
+  }, []);
 
   /* ── Invoice a credit customer (pay later) ───────────────────── */
   const [customers, setCustomers] = useState<Customer[]>([]);

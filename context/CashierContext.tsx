@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { mergeCashierSession, type CashierSessionSnapshot } from '@/lib/cashierSession';
 
 const SESSION_KEY = 'mg_cashier_session';
 
@@ -17,6 +18,7 @@ interface CashierContextValue {
   cashier:        CashierSession | null;
   cashierLoading: boolean;
   loginAsCashier: (session: CashierSession) => void;
+  updateCashierSession: (updates: Partial<CashierSession>) => void;
   logoutCashier:  () => void;
 }
 
@@ -26,6 +28,14 @@ export function CashierProvider({ children }: { children: React.ReactNode }) {
   const [cashier, setCashier]             = useState<CashierSession | null>(null);
   const [cashierLoading, setCashierLoading] = useState(true);
 
+  const persistCashier = useCallback((session: CashierSession | null) => {
+    if (session) {
+      try { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch { /* storage full */ }
+    } else {
+      try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
+    }
+  }, []);
+
   useEffect(() => {
     try {
       const raw = localStorage.getItem(SESSION_KEY);
@@ -34,18 +44,36 @@ export function CashierProvider({ children }: { children: React.ReactNode }) {
     setCashierLoading(false);
   }, []);
 
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== SESSION_KEY) return;
+      if (!event.newValue) { setCashier(null); return; }
+      try { setCashier(JSON.parse(event.newValue) as CashierSession); } catch { /* ignore */ }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
   const loginAsCashier = useCallback((session: CashierSession) => {
     setCashier(session);
-    try { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch { /* storage full */ }
-  }, []);
+    persistCashier(session);
+  }, [persistCashier]);
+
+  const updateCashierSession = useCallback((updates: Partial<CashierSession>) => {
+    setCashier(prev => {
+      const merged = mergeCashierSession(prev as CashierSessionSnapshot | null, updates as Partial<CashierSessionSnapshot>);
+      persistCashier(merged as CashierSession | null);
+      return merged as CashierSession | null;
+    });
+  }, [persistCashier]);
 
   const logoutCashier = useCallback(() => {
     setCashier(null);
-    try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
-  }, []);
+    persistCashier(null);
+  }, [persistCashier]);
 
   return (
-    <CashierContext.Provider value={{ cashier, cashierLoading, loginAsCashier, logoutCashier }}>
+    <CashierContext.Provider value={{ cashier, cashierLoading, loginAsCashier, updateCashierSession, logoutCashier }}>
       {children}
     </CashierContext.Provider>
   );

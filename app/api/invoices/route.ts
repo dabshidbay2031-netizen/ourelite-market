@@ -32,12 +32,12 @@ function mapInvoice(v: Record<string, unknown>) {
     orderId:      v.order_id ?? null,
     createdAt:    v.created_at,
     payments: payments.map((p: Record<string, unknown>) => ({
-      id:     p.id,
+      id:     Number(p.id),
       amount: Number(p.amount ?? 0),
-      method: p.method ?? 'cash',
-      note:   p.note ?? null,
-      paidAt: p.paid_at,
-    })).sort((a: { paidAt: string }, b: { paidAt: string }) => String(a.paidAt).localeCompare(String(b.paidAt))),
+      method: String(p.method ?? 'cash'),
+      note:   p.note != null ? String(p.note) : null,
+      paidAt: String(p.paid_at ?? ''),
+    })).sort((a, b) => a.paidAt.localeCompare(b.paidAt)),
   };
 }
 

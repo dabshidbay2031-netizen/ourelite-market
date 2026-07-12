@@ -9,6 +9,7 @@ import StoreAvatar from '@/components/StoreAvatar';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { MOGADISHU_DISTRICTS } from '@/lib/data';
+import { readReceiptAutoPrintSetting } from '@/lib/receiptSettings';
 import type { SifaloGateway } from '@/lib/types';
 
 /** Sifalo wallet options shown in checkout → mapped to a Sifalo gateway id. */
@@ -69,6 +70,7 @@ export default function CheckoutPage() {
   const [receiptDiscount,setReceiptDiscount]= useState(0);
   const [receiptTotal,   setReceiptTotal]   = useState(0);
   const [receiptName,    setReceiptName]    = useState('');
+  const [autoPrintReceipts, setAutoPrintReceipts] = useState(false);
 
   // Customer info
   const [name,  setName]  = useState('');
@@ -115,6 +117,9 @@ export default function CheckoutPage() {
 
   // Keep the global payment method in sync with the picker (used on the receipt).
   useEffect(() => { setPaymentMethod(payMethod); }, [payMethod, setPaymentMethod]);
+  useEffect(() => {
+    setAutoPrintReceipts(readReceiptAutoPrintSetting());
+  }, []);
 
   if (shopCart.length === 0 && paymentState !== 'success') {
     return (
@@ -347,6 +352,7 @@ export default function CheckoutPage() {
             subtotal={receiptSubtotal}
             discount={receiptDiscount}
             total={receiptTotal}
+            autoPrint={autoPrintReceipts}
             onClose={() => setShowReceipt(false)}
           />
         )}

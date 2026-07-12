@@ -136,10 +136,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     return NextResponse.json(order);
   }
   // Public view (scanned receipt QR): status + totals stay, PII is masked.
+  // notes can carry the customer's name/address, so they're dropped too.
   return NextResponse.json({
     ...order,
     customerName:  maskName(order.customerName),
     customerPhone: maskPhone(order.customerPhone),
+    userId:        null,
+    notes:         null,
     masked:        true,
   });
 }

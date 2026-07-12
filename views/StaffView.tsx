@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Header from '@/components/Header';
 import { useAuth } from '@/context/AuthContext';
+import { useCashier } from '@/context/CashierContext';
 import { PRIVILEGES, DEFAULT_PRIVILEGES } from '@/lib/cashierPrivileges';
 
 interface Cashier {
@@ -33,6 +34,7 @@ function PrivilegeTags({ keys }: { keys: string[] }) {
 /* ── Main view ─────────────────────────────────────────────── */
 export default function StaffView() {
   const { user } = useAuth();
+  const { cashier, updateCashierSession, logoutCashier } = useCashier();
 
   const [cashiers,  setCashiers]  = useState<Cashier[]>([]);
   const [fetching,  setFetching]  = useState(true);
@@ -124,6 +126,22 @@ export default function StaffView() {
       } else {
         setCashiers(prev => [data, ...prev]);
       }
+
+      if (cashier && cashier.id === data.id) {
+        if (data.isActive === false) {
+          logoutCashier();
+        } else {
+          updateCashierSession({
+            id: data.id,
+            name: data.name,
+            phone: data.phone,
+            businessId: data.businessId,
+            privileges: data.privileges ?? [],
+            loginAt: cashier.loginAt,
+          });
+        }
+      }
+
       setShowModal(false);
     } catch {
       setFormError('Network error');
@@ -140,6 +158,20 @@ export default function StaffView() {
     if (res.ok) {
       const updated = await res.json();
       setCashiers(prev => prev.map(x => x.id === c.id ? updated : x));
+      if (cashier && cashier.id === updated.id) {
+        if (updated.isActive === false) {
+          logoutCashier();
+        } else {
+          updateCashierSession({
+            id: updated.id,
+            name: updated.name,
+            phone: updated.phone,
+            businessId: updated.businessId,
+            privileges: updated.privileges ?? [],
+            loginAt: cashier.loginAt,
+          });
+        }
+      }
     }
   }
 
