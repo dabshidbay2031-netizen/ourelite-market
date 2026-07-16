@@ -10,6 +10,7 @@ function mapProduct(p: Record<string, unknown>) {
     name:          p.name,
     price:         p.price,
     originalPrice: p.original_price,
+    cost:          p.cost,
     category:      p.category,
     subCategory:   p.sub_category ?? null,
     icon:          p.icon,
@@ -24,6 +25,24 @@ function mapProduct(p: Record<string, unknown>) {
     tags:          p.tags         ?? [],
     brand:         p.brand        ?? null,
     imageUrl:      p.image_url    ?? null,
+    imageUrls:     p.image_urls   ?? [],
+  };
+}
+
+/** Per-store overrides. NULL => inherit the catalog value (see lib/listings). */
+function mapOverrides(row: Record<string, unknown>) {
+  return {
+    name:          row.name           ?? null,
+    description:   row.description    ?? null,
+    imageUrl:      row.image_url      ?? null,
+    imageUrls:     row.image_urls     ?? null,
+    brand:         row.brand          ?? null,
+    category:      row.category       ?? null,
+    subCategory:   row.sub_category   ?? null,
+    tags:          row.tags           ?? null,
+    sku:           row.sku            ?? null,
+    originalPrice: row.original_price ?? null,
+    cost:          row.cost           ?? null,
   };
 }
 
@@ -37,6 +56,8 @@ function mapBP(row: Record<string, unknown>) {
     moq:         (row.moq as number) ?? 1,
     isActive:    row.is_active,
     createdAt:   row.created_at,
+    customizedAt: row.customized_at ?? null,
+    overrides:   mapOverrides(row),
     product:     row.products
       ? mapProduct(row.products as Record<string, unknown>)
       : null,

@@ -4,7 +4,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useParams } from '@/lib/hashRouter';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
-import { getCategoryColor, hexToRgba } from '@/lib/data';
+import { getCategoryColor, hexToRgba, getCategoryById, getSubcategories } from '@/lib/data';
+import { useIncrementalList } from '@/lib/useIncrementalList';
+import { shuffleStable, useShuffleSeed } from '@/lib/shuffle';
+import { resolveListing, type ClaimRow, type Listing } from '@/lib/listings';
 import ProductCard from '@/components/ProductCard';
 import StoreMap from '@/components/StoreMap';
 import StoreAvatar from '@/components/StoreAvatar';
@@ -45,14 +48,13 @@ export default function SupplierProfilePage({ slug }: { slug?: string } = {}) {
       .then(r => r.json())
       .then((bp) => {
         if (cancelled || !Array.isArray(bp)) return;
+        // resolveListing applies this store's own overrides (photos, name,
+        // price, every detail) over the shared catalog row.
         setClaimedProducts(
-          bp.filter((x: { isActive?: boolean; product?: Product | null }) => x.isActive && x.product)
-            .map((x: { customPrice?: number; stockQty?: number; moq?: number; product: Product }) => ({
-              ...x.product,
-              price: Number(x.customPrice ?? x.product.price),
-              stock: Number(x.stockQty ?? 0),
-              moq:   x.moq ?? 1,
-            }) as Product),
+          (bp as ClaimRow[])
+            .filter(x => x.isActive && x.product)
+            .map(resolveListing)
+            .filter((p): p is Listing => p !== null),
         );
       })
       .catch(() => {});
@@ -71,6 +73,43 @@ export default function SupplierProfilePage({ slug }: { slug?: string } = {}) {
     () => Array.from(new Set(supplierProducts.map(p => p.category))),
     [supplierProducts]
   );
+
+  // ── In-store search & category filter ───────────────────
+  const shuffleSeed = useShuffleSeed();
+  const [query,     setQuery]     = useState('');
+  const [activeCat, setActiveCat] = useState('all');
+  const [activeSub, setActiveSub] = useState('all');
+
+  // Subcategories present in this store, for the selected category only.
+  const storeSubcategories = useMemo(() => {
+    if (activeCat === 'all') return [];
+    return getSubcategories(activeCat)
+      .filter(s => supplierProducts.some(p => p.category === activeCat && p.subCategory === s.id));
+  }, [activeCat, supplierProducts]);
+
+  const filteredProducts = useMemo(() => {
+    // Shuffle first (stable for the session) so a bulk-imported catalog isn't
+    // shown in upload order; the filters below preserve that order.
+    let list = shuffleStable(supplierProducts, shuffleSeed);
+    if (activeCat !== 'all') list = list.filter(p => p.category === activeCat);
+    if (activeSub !== 'all') list = list.filter(p => p.subCategory === activeSub);
+    const q = query.trim().toLowerCase();
+    if (q) {
+      list = list.filter(p =>
+        p.name.toLowerCase().includes(q)          ||
+        p.description.toLowerCase().includes(q)   ||
+        p.category.toLowerCase().includes(q)      ||
+        p.sku.toLowerCase().includes(q)           ||
+        (p.brand ?? '').toLowerCase().includes(q) ||
+        (p.tags ?? []).some(t => t.toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [supplierProducts, shuffleSeed, activeCat, activeSub, query]);
+
+  // A big storefront (thousands of items) must not mount every card at once.
+  const { visible, hasMore, sentinelRef } =
+    useIncrementalList(filteredProducts, `${query}|${activeCat}|${activeSub}`);
 
   const isOwner = currentSupplier?.id === supplierId;
 
@@ -255,15 +294,51 @@ export default function SupplierProfilePage({ slug }: { slug?: string } = {}) {
         </div>
       )}
 
-      {/* Categories */}
+      {/* Categories — filter this store's catalog */}
       {supplierCategories.length > 0 && (
         <div className="profile-section">
           <div className="profile-section-title">Categories</div>
           <div className="chips-row" style={{ flexWrap: 'wrap' }}>
-            {supplierCategories.map(cat => (
-              <span key={cat} className="chip active" style={{ cursor: 'default' }}>{cat}</span>
-            ))}
+            <button
+              className={`chip${activeCat === 'all' ? ' active' : ''}`}
+              onClick={() => { setActiveCat('all'); setActiveSub('all'); }}
+            >
+              All
+            </button>
+            {supplierCategories.map(cat => {
+              const meta = getCategoryById(cat);
+              return (
+                <button
+                  key={cat}
+                  className={`chip${activeCat === cat ? ' active' : ''}`}
+                  onClick={() => { setActiveCat(cat); setActiveSub('all'); }}
+                >
+                  {meta ? `${meta.icon} ${meta.name}` : cat}
+                </button>
+              );
+            })}
           </div>
+
+          {/* Subcategories — only for the selected category */}
+          {storeSubcategories.length > 0 && (
+            <div className="chips-row" style={{ flexWrap: 'wrap', marginTop: 8 }}>
+              <button
+                className={`chip${activeSub === 'all' ? ' active' : ''}`}
+                onClick={() => setActiveSub('all')}
+              >
+                All {getCategoryById(activeCat)?.name ?? ''}
+              </button>
+              {storeSubcategories.map(sub => (
+                <button
+                  key={sub.id}
+                  className={`chip${activeSub === sub.id ? ' active' : ''}`}
+                  onClick={() => setActiveSub(sub.id)}
+                >
+                  {sub.icon} {sub.name}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -300,25 +375,79 @@ export default function SupplierProfilePage({ slug }: { slug?: string } = {}) {
 
       {/* Products */}
       <div className="profile-section">
-        <div className="profile-section-title">Products ({supplierProducts.length})</div>
+        <div className="profile-section-title">
+          Products ({filteredProducts.length}
+          {filteredProducts.length !== supplierProducts.length && ` of ${supplierProducts.length}`})
+        </div>
+
+        {/* Search within this store */}
+        {supplierProducts.length > 0 && (
+          <div style={{ position: 'relative', marginBottom: 12 }}>
+            <input
+              className="form-input"
+              type="search"
+              placeholder={`Search in ${supplier.name}…`}
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              style={{ paddingLeft: 38, paddingRight: query ? 38 : 12 }}
+              aria-label={`Search products in ${supplier.name}`}
+            />
+            <span style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', opacity: .6 }}>
+              🔍
+            </span>
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                aria-label="Clear search"
+                style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '1rem' }}
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        )}
+
         {supplierProducts.length === 0 ? (
           <div className="empty-state" style={{ marginTop: 20 }}>
             <div className="empty-icon">📦</div>
             <div className="empty-title">No products yet</div>
           </div>
-        ) : (
-          <div className="product-grid">
-            {supplierProducts.map(p => (
-              <ProductCard
-                key={p.id}
-                product={p}
-                isWishlisted={wishlistSet.has(p.id)}
-                stock={inventoryMap.get(p.id) ?? p.stock}
-                onAddToCart={addToCart}
-                onToggleWishlist={toggleWishlist}
-              />
-            ))}
+        ) : filteredProducts.length === 0 ? (
+          <div className="empty-state" style={{ marginTop: 20 }}>
+            <div className="empty-icon">🔍</div>
+            <div className="empty-title">No matching products</div>
+            <div className="empty-text">
+              Nothing here matches{query ? ` “${query}”` : ' this filter'}. Try a different search or category.
+            </div>
+            <button
+              className="btn btn-ghost"
+              style={{ marginTop: 12 }}
+              onClick={() => { setQuery(''); setActiveCat('all'); setActiveSub('all'); }}
+            >
+              Clear filters
+            </button>
           </div>
+        ) : (
+          <>
+            <div className="product-grid">
+              {visible.map(p => (
+                <ProductCard
+                  key={p.id}
+                  product={p}
+                  isWishlisted={wishlistSet.has(p.id)}
+                  stock={inventoryMap.get(p.id) ?? p.stock}
+                  onAddToCart={addToCart}
+                  onToggleWishlist={toggleWishlist}
+                />
+              ))}
+            </div>
+            {hasMore && (
+              <div ref={sentinelRef} className="empty-state" style={{ padding: 24 }}>
+                <div className="spinner" style={{ width: 22, height: 22 }} />
+              </div>
+            )}
+          </>
         )}
       </div>
 

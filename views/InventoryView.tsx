@@ -7,6 +7,7 @@ import ProductImage from '@/components/ProductImage';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { useMyProductIds, type ClaimRecord } from '@/lib/useMyProductIds';
+import { authHeaders } from '@/lib/clientAuth';
 import { CATEGORIES } from '@/lib/data';
 
 const ProductImageUpload = dynamic(() => import('@/components/ProductImageUpload'), { ssr: false });
@@ -34,11 +35,13 @@ export default function InventoryPage() {
 
   // A store only manages its OWN products (owned + claimed), never the whole
   // catalog. `scoped` is false for admins / non-store accounts → show all.
-  // `claimed` distinguishes products this store CLAIMED from a wholesaler
-  // (only price/stock are theirs to change — "delete" = unclaim) from
-  // products the store OWNS directly (full edit; "delete" = remove from the
-  // shared catalog). Getting this wrong either 403s (owner-only APIs) or lets
-  // a claim edit silently mutate the WHOLESALER's shared catalog row.
+  // `claimed` distinguishes products this store CLAIMED from the catalog from
+  // products it OWNS directly. Both are fully editable, but they save to
+  // different places: a claim's edits become per-store overrides on the
+  // business_products row ("delete" = unclaim), while an owned product edits
+  // the shared catalog row itself ("delete" = remove from the catalog).
+  // Getting this wrong either 403s (owner-only APIs) or lets one store's edit
+  // silently mutate the catalog row every other store sells from.
   const { ids: myIds, scoped: myScoped, claimed, refresh: refreshClaims } = useMyProductIds();
 
   const [search, setSearch]   = useState('');
@@ -47,9 +50,10 @@ export default function InventoryPage() {
   // ── CRUD state ────────────────────────────────────────────
   const [showForm, setShowForm]     = useState(false);
   const [editingId, setEditingId]   = useState<number | null>(null);
-  // Set only when editing a product CLAIMED from a wholesaler — only price
-  // and stock are this store's to change; everything else belongs to the
-  // wholesaler's shared catalog row (see useMyProductIds).
+  // Set only when editing a product CLAIMED from the catalog. The listing is
+  // this store's own — every detail is editable — but the edits are saved as
+  // overrides on the claim, never onto the shared catalog row (see
+  // useMyProductIds / lib/listings).
   const [editingClaim, setEditingClaim] = useState<ClaimRecord | null>(null);
   const [form, setForm]             = useState<ProductForm>(emptyForm);
   const [saving, setSaving]         = useState(false);
@@ -77,22 +81,34 @@ export default function InventoryPage() {
   const openEdit = (productId: number) => {
     const p = products.find(x => x.id === productId) as (typeof products[number] & { barcode?: string }) | undefined;
     if (!p) return;
-    // A CLAIMED product's real price/stock are THIS store's own claim record,
-    // not the wholesaler's catalog price/stock — show the right numbers.
+    // A CLAIMED product's real values are THIS store's own claim record — its
+    // price, stock, and any details it has overridden (photos, name, …) — not
+    // the catalog's. Show the store's version, falling back to the catalog for
+    // anything it hasn't customized; otherwise re-saving would silently wipe
+    // the store's own edits back to the catalog values.
     const claim = claimed.get(productId) ?? null;
+    const ov    = (claim?.overrides ?? {}) as Record<string, unknown>;
+    const own   = <T,>(key: string, base: T): T =>
+      (ov[key] === null || ov[key] === undefined ? base : ov[key] as T);
+
+    const photos = own<string[] | null>('imageUrls', null)
+      ?? (own<string | null>('imageUrl', null) ? [own<string>('imageUrl', '')] : null)
+      ?? (p.imageUrls?.length ? p.imageUrls : (p.imageUrl ? [p.imageUrl] : []));
+
     setEditingId(productId);
     setEditingClaim(claim);
     setForm({
-      name: p.name,
+      name: own('name', p.name),
       price: String(claim ? claim.customPrice : p.price),
-      originalPrice: String(p.originalPrice),
-      cost: p.cost ? String(p.cost) : '',
-      category: p.category,
+      originalPrice: String(own('originalPrice', p.originalPrice)),
+      cost: (() => { const c = own<number | undefined>('cost', p.cost); return c ? String(c) : ''; })(),
+      category: own('category', p.category),
       stock: String(claim ? claim.stockQty : (inventory.find(i => i.id === p.id)?.stock ?? p.stock)),
-      sku: p.sku, description: p.description,
+      sku: own('sku', p.sku),
+      description: own('description', p.description),
       supplierId: p.supplierId ? String(p.supplierId) : '',
       barcode: p.barcode ?? '',
-      imageUrls: p.imageUrls?.length ? p.imageUrls : (p.imageUrl ? [p.imageUrl] : []),
+      imageUrls: photos,
       taxMode: (p as typeof p & { taxMode?: 'none' | 'included' | 'excluded' }).taxMode ?? 'none',
     });
     setShowForm(true);
@@ -209,16 +225,30 @@ export default function InventoryPage() {
     if (!form.name.trim() || !form.price) { toast('Name and price required', 'error'); return; }
     setSaving(true);
 
-    // A CLAIMED product isn't ours to rename/recategorize/etc. — only OUR
-    // price + stock for it are ours to change, via the claim record.
+    // A CLAIMED product is this store's own listing: photos, name, price —
+    // every detail is ours to change. The edits are saved as per-store
+    // overrides on the claim, so the shared catalog row is never touched and
+    // the reviews stay pooled across every store selling this product.
     if (editingId && editingClaim) {
       const res = await fetch(`/api/business-products/${editingClaim.bpId}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customPrice: form.price, stockQty: form.stock }),
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+        body: JSON.stringify({
+          customPrice:   form.price,
+          stockQty:      form.stock,
+          name:          form.name.trim(),
+          description:   form.description.trim(),
+          category:      form.category,
+          sku:           form.sku.trim(),
+          originalPrice: form.originalPrice || form.price,
+          cost:          form.cost || '0',
+          imageUrl:      form.imageUrls[0] ?? null,
+          imageUrls:     form.imageUrls,
+        }),
       });
       setSaving(false);
       if (res.ok) {
-        toast('Price & stock updated ✓', 'success');
+        toast('Listing updated ✓', 'success');
         setShowForm(false);
         refreshClaims();
         await reloadProducts();
@@ -557,35 +587,33 @@ export default function InventoryPage() {
         <div className="modal-overlay" onClick={() => !saving && setShowForm(false)}>
           <div className="modal-box" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <span>{editingClaim ? '🔗 Update Price & Stock' : editingId ? '✏️ Edit Product' : '➕ Add Product'}</span>
+              <span>{editingClaim ? '✏️ Edit Your Listing' : editingId ? '✏️ Edit Product' : '➕ Add Product'}</span>
               <button className="modal-close" onClick={() => setShowForm(false)}>✕</button>
             </div>
             <div className="modal-body">
 
               {editingClaim && (
                 <div className="inv-claim-notice">
-                  This product is claimed from a wholesaler — <strong>{form.name}</strong> and its photos, category,
-                  and description belong to their catalog. Only <strong>your price and stock</strong> are yours to change here.
-                  Use Delete below to remove it from your store instead.
+                  This is <strong>your listing</strong> — the photos, name, price and every detail below are yours to
+                  change, and only your store sees them. <strong>Reviews are shared</strong> with every store selling
+                  this product, so its ratings stay pooled. Use Delete to remove it from your store.
                 </div>
               )}
 
               {/* Product photos — upload up to 8; the first is the cover.
-                  Not applicable to a claimed item — it belongs to the wholesaler. */}
-              {!editingClaim && (
-                <div className="form-group">
-                  <label className="form-label">📷 Product Photos</label>
-                  <ProductImageUpload
-                    urls={form.imageUrls}
-                    onChange={urls => setForm(f => ({ ...f, imageUrls: urls }))}
-                    maxPhotos={8}
-                  />
-                </div>
-              )}
+                  A claimed listing keeps its own photos (stored as an override). */}
+              <div className="form-group">
+                <label className="form-label">📷 Product Photos</label>
+                <ProductImageUpload
+                  urls={form.imageUrls}
+                  onChange={urls => setForm(f => ({ ...f, imageUrls: urls }))}
+                  maxPhotos={8}
+                />
+              </div>
 
               <div className="form-group">
                 <label className="form-label">Product Name *</label>
-                <input className="form-input" placeholder="e.g. iPhone 15 Pro" value={form.name} onChange={e => pf('name', e.target.value)} disabled={!!editingClaim} />
+                <input className="form-input" placeholder="e.g. iPhone 15 Pro" value={form.name} onChange={e => pf('name', e.target.value)} />
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -593,16 +621,13 @@ export default function InventoryPage() {
                   <label className="form-label">{editingClaim ? 'Your Price ($) *' : 'Sale Price ($) *'}</label>
                   <input className="form-input" type="number" min="0" step="0.01" placeholder="0.00" value={form.price} onChange={e => pf('price', e.target.value)} />
                 </div>
-                {!editingClaim && (
-                  <div className="form-group">
-                    <label className="form-label">Original Price ($)</label>
-                    <input className="form-input" type="number" min="0" step="0.01" placeholder="0.00" value={form.originalPrice} onChange={e => pf('originalPrice', e.target.value)} />
-                  </div>
-                )}
+                <div className="form-group">
+                  <label className="form-label">Original Price ($)</label>
+                  <input className="form-input" type="number" min="0" step="0.01" placeholder="0.00" value={form.originalPrice} onChange={e => pf('originalPrice', e.target.value)} />
+                </div>
               </div>
 
-              {!editingClaim && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                   <div className="form-group">
                     <label className="form-label">Cost ($)</label>
                     <input className="form-input" type="number" min="0" step="0.01" placeholder="0.00" value={form.cost} onChange={e => pf('cost', e.target.value)} />
@@ -616,40 +641,42 @@ export default function InventoryPage() {
                       {formMargin == null ? '— enter a cost' : `$${formMargin.profit.toFixed(2)} (${formMargin.pct}%)`}
                     </div>
                   </div>
-                </div>
-              )}
+              </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: editingClaim ? '1fr' : '1fr 1fr', gap: 10 }}>
-                {!editingClaim && (
-                  <div className="form-group">
-                    <label className="form-label">Category *</label>
-                    <select className="form-input" value={form.category} onChange={e => pf('category', e.target.value)}>
-                      {CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
-                    </select>
-                  </div>
-                )}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div className="form-group">
+                  <label className="form-label">Category *</label>
+                  <select className="form-input" value={form.category} onChange={e => pf('category', e.target.value)}>
+                    {CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+                  </select>
+                </div>
                 <div className="form-group">
                   <label className="form-label">Stock Qty</label>
                   <input className="form-input" type="number" min="0" placeholder="0" value={form.stock} onChange={e => pf('stock', e.target.value)} />
                 </div>
               </div>
 
+              {/* SKU is the store's own inventory code, so a claimed listing
+                  gets its own. The Supplier picker doesn't apply to a claim —
+                  the selling store IS the supplier. */}
+              <div style={{ display: 'grid', gridTemplateColumns: editingClaim ? '1fr' : '1fr 1fr', gap: 10 }}>
+                <div className="form-group">
+                  <label className="form-label">SKU</label>
+                  <input className="form-input" placeholder="e.g. PRD-001" value={form.sku} onChange={e => pf('sku', e.target.value)} />
+                </div>
+                {!editingClaim && (
+                  <div className="form-group">
+                    <label className="form-label">Supplier</label>
+                    <select className="form-input" value={form.supplierId} onChange={e => pf('supplierId', e.target.value)}>
+                      <option value="">None</option>
+                      {suppliers.map(s => <option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+
               {!editingClaim && (
                 <>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                    <div className="form-group">
-                      <label className="form-label">SKU</label>
-                      <input className="form-input" placeholder="e.g. PRD-001" value={form.sku} onChange={e => pf('sku', e.target.value)} />
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">Supplier</label>
-                      <select className="form-input" value={form.supplierId} onChange={e => pf('supplierId', e.target.value)}>
-                        <option value="">None</option>
-                        {suppliers.map(s => <option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}
-                      </select>
-                    </div>
-                  </div>
-
                   {/* Tax / VAT mode */}
                   <div className="form-group">
                     <label className="form-label">VAT / Tax (5%)</label>
@@ -728,15 +755,23 @@ export default function InventoryPage() {
                     </div>
                   </div>
 
-                  <div className="form-group">
-                    <label className="form-label">Description</label>
-                    <textarea className="form-input" rows={3} style={{ resize: 'vertical', fontFamily: 'inherit' }} placeholder="Product details…" value={form.description} onChange={e => pf('description', e.target.value)} maxLength={500} />
-                  </div>
                 </>
               )}
 
+              {/* Description is per-store on a claimed listing. */}
+              <div className="form-group">
+                <label className="form-label">Description</label>
+                <textarea className="form-input" rows={3} style={{ resize: 'vertical', fontFamily: 'inherit' }} placeholder="Product details…" value={form.description} onChange={e => pf('description', e.target.value)} maxLength={500} />
+              </div>
+
+              {editingClaim && (
+                <p style={{ fontSize: '.72rem', color: 'var(--text-muted)', margin: '0 0 10px' }}>
+                  Barcode and reviews stay shared with the catalog — they identify the product itself.
+                </p>
+              )}
+
               <button className="btn btn-primary btn-full btn-lg" onClick={handleSave} disabled={saving}>
-                {saving ? 'Saving…' : editingClaim ? 'Update Price & Stock' : editingId ? 'Update Product' : 'Add Product'}
+                {saving ? 'Saving…' : editingClaim ? 'Update Listing' : editingId ? 'Update Product' : 'Add Product'}
               </button>
             </div>
           </div>

@@ -60,6 +60,9 @@ export default function SupplierDashboard({ supplier }: Props) {
   const [form,           setForm]           = useState<SupplierProductFormData>(emptyProductForm);
   const [savingProd,     setSavingProd]     = useState(false);
   const [deletingId,     setDeletingId]     = useState<number | null>(null);
+  // window.confirm is blocked in the Next 16 / Turbopack runtime, so deletion
+  // is gated by this in-app confirm modal (same pattern as Inventory).
+  const [confirmDelete,  setConfirmDelete]  = useState<{ id: number; name: string } | null>(null);
 
   /* ── Sales state ──────────────────────────────────────── */
   const [orders,       setOrders]       = useState<Order[]>([]);
@@ -252,8 +255,10 @@ export default function SupplierDashboard({ supplier }: Props) {
     await reloadProducts();
   }
 
-  async function handleDeleteProduct(productId: number) {
-    if (!confirm('Delete this product?')) return;
+  async function doDeleteProduct() {
+    if (!confirmDelete) return;
+    const productId = confirmDelete.id;
+    setConfirmDelete(null);
     setDeletingId(productId);
     const res = await fetch(`/api/products/${productId}`, { method: 'DELETE' });
     setDeletingId(null);
@@ -262,7 +267,8 @@ export default function SupplierDashboard({ supplier }: Props) {
       setProducts(prev => prev.filter(p => p.id !== productId));
       await reloadProducts();
     } else {
-      toast('Failed to delete', 'error');
+      const err = await res.json().catch(() => null);
+      toast(err?.error ?? 'Failed to delete', 'error');
     }
   }
 
@@ -480,7 +486,7 @@ export default function SupplierDashboard({ supplier }: Props) {
                       <button
                         className="btn btn-ghost btn-sm"
                         style={{ color: 'var(--danger)' }}
-                        onClick={() => handleDeleteProduct(p.id)}
+                        onClick={() => setConfirmDelete({ id: p.id, name: p.name })}
                         disabled={deletingId === p.id}
                         title="Delete"
                       >
@@ -933,6 +939,31 @@ export default function SupplierDashboard({ supplier }: Props) {
               >
                 {savingProd ? 'Saving…' : editingProd ? 'Update Product' : 'Add Product'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════ DELETE CONFIRM MODAL ═══════════ */}
+      {confirmDelete && (
+        <div className="modal-overlay" onClick={() => setConfirmDelete(null)}>
+          <div className="modal-box" style={{ maxWidth: 400 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span>🗑️ Delete product</span>
+              <button className="modal-close" onClick={() => setConfirmDelete(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ marginBottom: 18, lineHeight: 1.5 }}>
+                Delete <strong>{confirmDelete.name}</strong>? This cannot be undone.
+              </p>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn btn-outline btn-lg" style={{ flex: 1 }} onClick={() => setConfirmDelete(null)}>
+                  Cancel
+                </button>
+                <button className="btn btn-danger btn-lg" style={{ flex: 1 }} onClick={doDeleteProduct}>
+                  Delete
+                </button>
+              </div>
             </div>
           </div>
         </div>

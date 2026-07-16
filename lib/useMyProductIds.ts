@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
 import { useCashier } from '@/context/CashierContext';
+import type { ClaimRow, OverridableField } from '@/lib/listings';
 
 /** A claimed product's business-specific record — what THIS store, not the
  *  wholesaler, actually charges/stocks it at. */
@@ -13,6 +14,11 @@ export interface ClaimRecord {
   stockQty:    number;
   moq:         number;
   isActive:    boolean;
+  /** This store's own edits to the catalog row (photos, name, …). A NULL field
+   *  means "inherit from the catalog" — see lib/listings. Needed so the edit
+   *  form shows what the STORE saved, not the wholesaler's original. */
+  overrides:   Partial<Record<OverridableField, unknown>>;
+  customized:  boolean;
 }
 
 /**
@@ -70,10 +76,12 @@ export function useMyProductIds(): {
         if (cancelled) return;
         const map = new Map<number, ClaimRecord>();
         if (Array.isArray(bp)) {
-          for (const row of bp as { id: number; productId: number; customPrice: number; stockQty: number; moq: number; isActive: boolean }[]) {
+          for (const row of bp as ClaimRow[]) {
             map.set(row.productId, {
-              bpId: row.id, customPrice: row.customPrice, stockQty: row.stockQty,
+              bpId: row.id, customPrice: Number(row.customPrice ?? 0), stockQty: Number(row.stockQty ?? 0),
               moq: row.moq ?? 1, isActive: row.isActive,
+              overrides: row.overrides ?? {},
+              customized: Boolean(row.customizedAt),
             });
           }
         }

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useApp }  from '@/context/AppContext';
 import type { Supplier, Product, Order } from '@/lib/types';
@@ -78,7 +78,91 @@ export default function AdminDashboard() {
   // Edit states
   const [editBiz,    setEditBiz]    = useState<Supplier | null>(null);
   const [editProd,   setEditProd]   = useState<Product  | null>(null);
+  // window.confirm is blocked in the Next 16 / Turbopack runtime, so product
+  // deletion is gated by the in-app confirm modal below (setConfirmDeleteProd).
+  const [confirmDeleteProd, setConfirmDeleteProd] = useState<{ id: number; name: string } | null>(null);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
+
+  /* ── Search / filter state ────────────────────────────────────────────────
+     These only ever narrow a *derived view*. The fetched `businesses` and
+     `products` arrays stay whole, so filters compose with each other and
+     clearing a box restores the full list without a refetch. */
+  const [bizQuery,  setBizQuery]  = useState('');
+  const [prodQuery, setProdQuery] = useState('');
+  const [prodCat,   setProdCat]   = useState('');
+  const [prodBiz,   setProdBiz]   = useState(0);
+
+  const filteredBusinesses = useMemo(() => {
+    const q = bizQuery.trim().toLowerCase();
+    if (!q) return businesses;
+    return businesses.filter(b =>
+      b.name.toLowerCase().includes(q)             ||
+      (b.location ?? '').toLowerCase().includes(q) ||
+      (b.slug ?? '').toLowerCase().includes(q)     ||
+      (b.bio ?? '').toLowerCase().includes(q)      ||
+      String(b.id) === q
+    );
+  }, [businesses, bizQuery]);
+
+  /* Products a store CLAIMED live in business_products, not products.supplier_id.
+     Without pulling those in, picking a claim-model store here shows an almost
+     empty list even though its storefront is full. Only fetched when one
+     specific business is selected. */
+  const [claimedForBiz, setClaimedForBiz] = useState<Product[]>([]);
+  useEffect(() => {
+    if (!prodBiz) { setClaimedForBiz([]); return; }
+    let cancelled = false;
+    fetch(`/api/business-products?supplierId=${prodBiz}`)
+      .then(r => r.json())
+      .then((bp) => {
+        if (cancelled || !Array.isArray(bp)) return;
+        setClaimedForBiz(
+          bp.filter((x: { product?: Product | null }) => x.product)
+            .map((x: { customPrice?: number; stockQty?: number; product: Product }) => ({
+              ...x.product,
+              price: Number(x.customPrice ?? x.product.price),
+              stock: Number(x.stockQty ?? 0),
+            }) as Product),
+        );
+      })
+      .catch(() => setClaimedForBiz([]));
+    return () => { cancelled = true; };
+  }, [prodBiz]);
+
+  /** Ids shown because the store claimed them (vs. uploaded them) — badged in the table. */
+  const claimedIds = useMemo(() => {
+    if (!prodBiz) return new Set<number>();
+    const owned = new Set(products.filter(p => p.supplierId === prodBiz).map(p => p.id));
+    return new Set(claimedForBiz.filter(p => !owned.has(p.id)).map(p => p.id));
+  }, [prodBiz, products, claimedForBiz]);
+
+  /** Alphabetical for the Business picker — 84 stores in fetch order is unusable. */
+  const sortedBusinesses = useMemo(
+    () => [...businesses].sort((a, b) => a.name.localeCompare(b.name)),
+    [businesses],
+  );
+
+  const filteredProducts = useMemo(() => {
+    let list = products;
+    if (prodBiz) {
+      const owned    = products.filter(p => p.supplierId === prodBiz);
+      const ownedIds = new Set(owned.map(p => p.id));
+      list = [...owned, ...claimedForBiz.filter(p => !ownedIds.has(p.id))];
+    }
+    if (prodCat) list = list.filter(p => p.category === prodCat);
+    const q = prodQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter(p =>
+        p.name.toLowerCase().includes(q)              ||
+        p.sku.toLowerCase().includes(q)               ||
+        (p.brand   ?? '').toLowerCase().includes(q)   ||
+        (p.barcode ?? '').toLowerCase().includes(q)   ||
+        String(p.id) === q                            ||
+        (p.tags ?? []).some(t => t.toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [products, claimedForBiz, prodQuery, prodCat, prodBiz]);
 
   // Storefront (hero banner) management
   const [hero,         setHero]         = useState<HeroBanner | null>(null);
@@ -114,7 +198,12 @@ export default function AdminDashboard() {
       } else if (t === 'businesses') {
         const r = await fetch('/api/suppliers');   setBusinesses(await r.json());
       } else if (t === 'products') {
-        const r = await fetch('/api/products');    setProducts(await r.json());
+        // Suppliers come too: the products list needs them for the "Business"
+        // filter dropdown and the Supplier column. Without this the dropdown
+        // is empty unless the Businesses tab happened to be opened first.
+        const [pr, sr] = await Promise.all([fetch('/api/products'), fetch('/api/suppliers')]);
+        setProducts(await pr.json());
+        setBusinesses(await sr.json());
       } else if (t === 'orders') {
         const r = await fetch('/api/orders', { headers: await authHeaders() }); setOrders(await r.json());
       } else if (t === 'users') {
@@ -227,11 +316,13 @@ export default function AdminDashboard() {
     else        { toast('Save failed', 'error'); }
   };
 
-  const deleteProd = async (id: number, name: string) => {
-    if (!confirm(`Delete "${name}"?`)) return;
+  const doDeleteProd = async () => {
+    if (!confirmDeleteProd) return;
+    const { id } = confirmDeleteProd;
+    setConfirmDeleteProd(null);
     const res = await fetch(`/api/products/${id}`, { method:'DELETE' });
     if (res.ok) { toast('Deleted', 'default'); load('products'); }
-    else        { toast('Delete failed', 'error'); }
+    else        { const e = await res.json().catch(() => ({})); toast(e.error ?? 'Delete failed', 'error'); }
   };
 
   /* ── Storefront (hero banner) actions ──────────────────────────── */
@@ -423,14 +514,24 @@ export default function AdminDashboard() {
             {/* ── BUSINESSES ─────────────────────────────────────── */}
             {tab === 'businesses' && (
               <div>
-                <div style={{ display:'flex', gap:10, marginBottom:14 }}>
-                  <input className="form-input" placeholder="Search businesses…" style={{ maxWidth:300 }}
-                    onChange={e => {
-                      const q = e.target.value.toLowerCase();
-                      if (!q) load('businesses');
-                      else setBusinesses(prev => prev.filter(b => b.name.toLowerCase().includes(q) || (b.location ?? '').toLowerCase().includes(q)));
-                    }}
+                <div style={{ display:'flex', gap:10, marginBottom:14, alignItems:'center', flexWrap:'wrap' }}>
+                  <input
+                    className="form-input"
+                    type="search"
+                    placeholder="Search name, location, link or ID…"
+                    style={{ maxWidth:300 }}
+                    value={bizQuery}
+                    onChange={e => setBizQuery(e.target.value)}
+                    aria-label="Search businesses"
                   />
+                  <span style={{ fontSize:'.8rem', color:'var(--text-muted)' }}>
+                    {filteredBusinesses.length}
+                    {filteredBusinesses.length !== businesses.length && ` of ${businesses.length}`}
+                    {' '}business{filteredBusinesses.length === 1 ? '' : 'es'}
+                  </span>
+                  {bizQuery && (
+                    <button className="btn btn-ghost btn-sm" onClick={() => setBizQuery('')}>Clear</button>
+                  )}
                 </div>
                 <div style={{ background:'var(--surface)', borderRadius:12, border:'1px solid var(--border)', overflow:'hidden' }}>
                   <div style={{ overflowX:'auto' }}>
@@ -441,7 +542,7 @@ export default function AdminDashboard() {
                         {isAdmin && <th style={th}>Actions</th>}
                       </tr></thead>
                       <tbody>
-                        {businesses.map(b => (
+                        {filteredBusinesses.map(b => (
                           <tr key={b.id}>
                             <td style={td}>
                               <div style={{ display:'flex', alignItems:'center', gap:8 }}>
@@ -485,7 +586,7 @@ export default function AdminDashboard() {
                             )}
                           </tr>
                         ))}
-                        {businesses.length === 0 && <tr><td colSpan={isAdmin?5:4} style={{ ...td, textAlign:'center', color:'var(--text-muted)' }}>No businesses found</td></tr>}
+                        {filteredBusinesses.length === 0 && <tr><td colSpan={isAdmin?5:4} style={{ ...td, textAlign:'center', color:'var(--text-muted)' }}>{bizQuery ? `No businesses match "${bizQuery}"` : 'No businesses found'}</td></tr>}
                       </tbody>
                     </table>
                   </div>
@@ -496,35 +597,49 @@ export default function AdminDashboard() {
             {/* ── PRODUCTS ───────────────────────────────────────── */}
             {tab === 'products' && (
               <div>
-                <div style={{ display:'flex', gap:10, marginBottom:14, flexWrap:'wrap' }}>
-                  <input className="form-input" placeholder="Search products…" style={{ maxWidth:260 }}
-                    onChange={e => {
-                      const q = e.target.value.toLowerCase();
-                      if (!q) load('products');
-                      else setProducts(prev => prev.filter(p =>
-                        p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q)));
-                    }}
+                <div style={{ display:'flex', gap:10, marginBottom:14, flexWrap:'wrap', alignItems:'center' }}>
+                  <input
+                    className="form-input"
+                    type="search"
+                    placeholder="Search name, SKU, brand, barcode, tag or ID…"
+                    style={{ maxWidth:280 }}
+                    value={prodQuery}
+                    onChange={e => setProdQuery(e.target.value)}
+                    aria-label="Search products"
                   />
-                  <select className="form-input" style={{ maxWidth:180 }}
-                    onChange={e => {
-                      const v = e.target.value;
-                      if (!v) load('products');
-                      else setProducts(prev => prev.filter(p => p.category === v));
-                    }}>
+                  <select
+                    className="form-input" style={{ maxWidth:180 }}
+                    value={prodCat}
+                    onChange={e => setProdCat(e.target.value)}
+                    aria-label="Filter by category"
+                  >
                     <option value="">All Categories</option>
                     {['electronics','clothes','home','food','health','sports','medicine','cosmetics','construction','furniture','cars','books','other'].map(c => (
                       <option key={c} value={c}>{c}</option>
                     ))}
                   </select>
-                  <select className="form-input" style={{ maxWidth:200 }}
-                    onChange={e => {
-                      const v = parseInt(e.target.value);
-                      if (!v) load('products');
-                      else setProducts(prev => prev.filter(p => p.supplierId === v));
-                    }}>
+                  <select
+                    className="form-input" style={{ maxWidth:200 }}
+                    value={prodBiz || ''}
+                    onChange={e => setProdBiz(parseInt(e.target.value) || 0)}
+                    aria-label="Filter by business"
+                  >
                     <option value="">All Businesses</option>
-                    {businesses.map(b => <option key={b.id} value={b.id}>{b.icon} {b.name}</option>)}
+                    {sortedBusinesses.map(b => <option key={b.id} value={b.id}>{b.icon} {b.name}</option>)}
                   </select>
+                  <span style={{ fontSize:'.8rem', color:'var(--text-muted)' }}>
+                    {filteredProducts.length}
+                    {filteredProducts.length !== products.length && ` of ${products.length}`}
+                    {' '}product{filteredProducts.length === 1 ? '' : 's'}
+                  </span>
+                  {(prodQuery || prodCat || prodBiz) && (
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => { setProdQuery(''); setProdCat(''); setProdBiz(0); }}
+                    >
+                      Clear
+                    </button>
+                  )}
                 </div>
                 <div style={{ background:'var(--surface)', borderRadius:12, border:'1px solid var(--border)', overflow:'hidden' }}>
                   <div style={{ overflowX:'auto' }}>
@@ -536,7 +651,7 @@ export default function AdminDashboard() {
                         {isAdmin && <th style={th}>Actions</th>}
                       </tr></thead>
                       <tbody>
-                        {products.slice(0,200).map(p => {
+                        {filteredProducts.slice(0,200).map(p => {
                           const sup = businesses.find(b => b.id === p.supplierId);
                           return (
                             <tr key={p.id}>
@@ -558,25 +673,34 @@ export default function AdminDashboard() {
                                   {p.stock}
                                 </span>
                               </td>
-                              <td style={td}>{sup ? `${sup.icon} ${sup.name}` : '—'}</td>
+                              <td style={td}>
+                                {claimedIds.has(p.id) ? (
+                                  // Listed by the selected store via the claim model — the
+                                  // catalog row itself belongs to whoever uploaded it.
+                                  <span title={sup ? `Catalog owner: ${sup.name}` : 'Claimed from the shared catalog'}
+                                        style={{ fontSize:'.72rem', fontWeight:700, color:'#0369A1', background:'#0EA5E922', border:'1px solid #0EA5E944', borderRadius:99, padding:'2px 8px', whiteSpace:'nowrap' }}>
+                                    🔗 Claimed
+                                  </span>
+                                ) : (sup ? `${sup.icon} ${sup.name}` : '—')}
+                              </td>
                               {isAdmin && (
                                 <td style={td}>
                                   <div style={{ display:'flex', gap:6 }}>
                                     <button className="btn btn-secondary btn-sm" onClick={() => setEditProd({ ...p })}>✏️</button>
-                                    <button className="btn btn-ghost btn-sm" style={{ color:'var(--danger)' }} onClick={() => deleteProd(p.id, p.name)}>🗑️</button>
+                                    <button className="btn btn-ghost btn-sm" style={{ color:'var(--danger)' }} onClick={() => setConfirmDeleteProd({ id: p.id, name: p.name })}>🗑️</button>
                                   </div>
                                 </td>
                               )}
                             </tr>
                           );
                         })}
-                        {products.length === 0 && <tr><td colSpan={isAdmin?6:5} style={{ ...td, textAlign:'center', color:'var(--text-muted)' }}>No products</td></tr>}
+                        {filteredProducts.length === 0 && <tr><td colSpan={isAdmin?6:5} style={{ ...td, textAlign:'center', color:'var(--text-muted)' }}>{(prodQuery || prodCat || prodBiz) ? 'No products match these filters' : 'No products'}</td></tr>}
                       </tbody>
                     </table>
                   </div>
-                  {products.length > 200 && (
+                  {filteredProducts.length > 200 && (
                     <div style={{ padding:'10px 16px', fontSize:'.8rem', color:'var(--text-muted)', borderTop:'1px solid var(--border)' }}>
-                      Showing first 200 of {products.length} products. Use filters to narrow down.
+                      Showing first 200 of {filteredProducts.length} matching products. Search or filter to narrow down.
                     </div>
                   )}
                 </div>
@@ -949,6 +1073,27 @@ export default function AdminDashboard() {
                 <textarea className="form-input" rows={2} value={editProd.description} onChange={e => setEditProd(p => p ? { ...p, description: e.target.value } : p)} style={{ resize:'vertical', fontFamily:'inherit' }} />
               </div>
               <button className="btn btn-primary btn-full" onClick={saveProd}>Save Changes</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete Product Confirm Modal ───────────────────────────── */}
+      {confirmDeleteProd && isAdmin && (
+        <div className="modal-overlay" onClick={() => setConfirmDeleteProd(null)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth:400 }}>
+            <div className="modal-header">
+              <span>🗑️ Delete product</span>
+              <button className="modal-close" onClick={() => setConfirmDeleteProd(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ marginBottom:18, lineHeight:1.5 }}>
+                Delete <strong>{confirmDeleteProd.name}</strong>? This cannot be undone.
+              </p>
+              <div style={{ display:'flex', gap:10 }}>
+                <button className="btn btn-outline btn-lg" style={{ flex:1 }} onClick={() => setConfirmDeleteProd(null)}>Cancel</button>
+                <button className="btn btn-danger btn-lg" style={{ flex:1 }} onClick={doDeleteProd}>Delete</button>
+              </div>
             </div>
           </div>
         </div>

@@ -10,12 +10,17 @@ import { useAuth } from '@/context/AuthContext';
 import { CATEGORIES, SUBCATEGORIES } from '@/lib/data';
 import { useClaimProduct } from '@/lib/useClaimProduct';
 import { useIncrementalList } from '@/lib/useIncrementalList';
+import { useShuffleSeed } from '@/lib/shuffle';
+import { personalizeMix, useAffinity, useRecordInterest } from '@/lib/affinity';
 import { useHeroBanner } from '@/lib/useHeroBanner';
 import { districtFor, MOGADISHU_DISTRICTS } from '@/lib/districts';
 
 export default function ExplorePage() {
   const router = useRouter();
   const { state, setCartOpen, addToCart, toggleWishlist } = useApp();
+  const shuffleSeed = useShuffleSeed();
+  const affinity    = useAffinity();
+  const record      = useRecordInterest();
   const { accountType } = useAuth();
   const { products, loading } = state;
   const { canClaim, claim, isMine, claimingId } = useClaimProduct();
@@ -66,8 +71,13 @@ export default function ExplorePage() {
   }, [products, recognizedDistrictBySupplier]);
 
   const filtered = useMemo(() => {
+    // The API returns the catalog ordered by id, so without this a bulk import
+    // shows up as one solid block. Shuffle the base list (fresh each visit,
+    // stable while scrolling) and blend ~30% toward what this shopper looks
+    // for — filtering below preserves that order.
+    const base = personalizeMix(products, affinity, shuffleSeed);
     // Filter out B2B-only products for non-business/supplier users
-    let list = products.filter(p => !p.isB2b || accountType === 'business' || accountType === 'supplier');
+    let list = base.filter(p => !p.isB2b || accountType === 'business' || accountType === 'supplier');
     if (activeCategory !== 'all') list = list.filter(p => p.category === activeCategory);
     if (activeSub !== 'all')      list = list.filter(p => p.subCategory === activeSub);
     if (activeDistrict !== 'all') list = list.filter(p =>
@@ -88,7 +98,7 @@ export default function ExplorePage() {
       );
     }
     return list;
-  }, [products, search, activeCategory, activeSub, activeDistrict, recognizedDistrictBySupplier, accountType]);
+  }, [products, affinity, shuffleSeed, search, activeCategory, activeSub, activeDistrict, recognizedDistrictBySupplier, accountType]);
 
   const bestSellers = useMemo(() =>
     [...products].sort((a, b) => b.sold - a.sold).slice(0, 8),
@@ -164,7 +174,7 @@ export default function ExplorePage() {
             <button
               key={cat.id}
               className={`chip ${activeCategory === cat.id ? 'active' : ''}`}
-              onClick={() => { setActiveCategory(cat.id); setActiveSub('all'); }}
+              onClick={() => { setActiveCategory(cat.id); setActiveSub('all'); record(cat.id, null, 'category'); }}
             >
               {cat.icon} {cat.name}
             </button>
@@ -184,7 +194,7 @@ export default function ExplorePage() {
               <button
                 key={s.id}
                 className={`chip chip-sm ${activeSub === s.id ? 'active' : ''}`}
-                onClick={() => setActiveSub(s.id)}
+                onClick={() => { setActiveSub(s.id); record(activeCategory, s.id, 'category'); }}
               >
                 {s.icon} {s.name}
               </button>

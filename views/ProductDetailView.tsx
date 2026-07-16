@@ -11,6 +11,7 @@ import ProductImage from '@/components/ProductImage';
 import { reliableImageSrc } from '@/lib/imageFallback';
 import { useClaimProduct } from '@/lib/useClaimProduct';
 import { similarProducts } from '@/lib/similarity';
+import { recordInterest } from '@/lib/affinity';
 
 interface Review {
   id: number; userId: string; rating: number;
@@ -50,6 +51,12 @@ export default function ProductDetailPage() {
 
   const productId = parseInt(params.id ?? params.productId ?? '', 10);
   const product   = products.find(p => p.id === productId);
+
+  // Viewing a product is a softer interest signal than searching for one, but
+  // it still steers what Explore surfaces later.
+  useEffect(() => {
+    if (product?.category) recordInterest(product.category, product.subCategory, 'view');
+  }, [product?.id, product?.category, product?.subCategory]);
 
   // Storefront context: reached via '/:slug/:productId' — reviews written here
   // credit THAT store (a claimed product credits the claiming store, not the

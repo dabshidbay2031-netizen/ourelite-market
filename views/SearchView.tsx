@@ -9,6 +9,7 @@ import { useAuth } from '@/context/AuthContext';
 import { CATEGORIES, SUBCATEGORIES } from '@/lib/data';
 import { useClaimProduct } from '@/lib/useClaimProduct';
 import { useIncrementalList } from '@/lib/useIncrementalList';
+import { recordInterest } from '@/lib/affinity';
 import { useLiveLocation } from '@/lib/useLiveLocation';
 import { formatDistance, distanceKm } from '@/lib/geo';
 import { districtFor, MOGADISHU_DISTRICTS } from '@/lib/districts';
@@ -296,6 +297,29 @@ function SearchInner() {
   // Render the grid in slices — mounting all 600+ cards at once froze first paint
   const { visible, hasMore, sentinelRef } =
     useIncrementalList(filtered, `${query}|${activeCategory}|${activeSubCat}|${activeDistrict}`);
+
+  /* ── Learn from searches ────────────────────────────────────────────────
+     A search is the clearest statement of intent we get ("laptop" → electronics
+     /laptops), so record the dominant category of the matches; Explore later
+     blends ~30% of its grid toward it. Debounced, so typing "laptop" logs one
+     signal rather than one per keystroke. */
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2 || filtered.length === 0) return;
+    const t = setTimeout(() => {
+      const top = filtered.slice(0, 12);
+      const commonest = (vals: (string | null | undefined)[]) => {
+        const tally = new Map<string, number>();
+        for (const v of vals) if (v) tally.set(v, (tally.get(v) ?? 0) + 1);
+        return Array.from(tally.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+      };
+      const cat = commonest(top.map(p => p.category));
+      if (!cat) return;
+      const sub = commonest(top.filter(p => p.category === cat).map(p => p.subCategory));
+      recordInterest(cat, sub, 'search');
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [query, filtered]);
 
   /* ── Nearby offers: live location + distance-ranked stores ──────────────
      Every store selling a matching product (uploader AND claimers) becomes a
