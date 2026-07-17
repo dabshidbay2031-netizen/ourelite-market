@@ -8,7 +8,8 @@ import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { useMyProductIds, type ClaimRecord } from '@/lib/useMyProductIds';
 import { authHeaders } from '@/lib/clientAuth';
-import { CATEGORIES } from '@/lib/data';
+import { CATEGORIES, SUBCATEGORIES } from '@/lib/data';
+import StoreAvatar, { isLogoUrl } from '@/components/StoreAvatar';
 
 const ProductImageUpload = dynamic(() => import('@/components/ProductImageUpload'), { ssr: false });
 const BarcodeScanner     = dynamic(() => import('@/components/BarcodeScanner'),     { ssr: false });
@@ -19,12 +20,14 @@ const EMOJI_OPTIONS = ['📦','📱','💻','🎧','👗','👟','🏠','🍎','
 
 interface ProductForm {
   name: string; price: string; originalPrice: string; cost: string; category: string;
+  subCategory: string; brand: string; tags: string;
   stock: string; sku: string; description: string;
   supplierId: string; barcode: string; imageUrls: string[];
   taxMode: 'none' | 'included' | 'excluded';
 }
 const emptyForm: ProductForm = {
   name: '', price: '', originalPrice: '', cost: '', category: 'electronics',
+  subCategory: '', brand: '', tags: '',
   stock: '0', sku: '', description: '', supplierId: '', barcode: '', imageUrls: [],
   taxMode: 'none',
 };
@@ -104,6 +107,9 @@ export default function InventoryPage() {
       originalPrice: String(own('originalPrice', p.originalPrice)),
       cost: (() => { const c = own<number | undefined>('cost', p.cost); return c ? String(c) : ''; })(),
       category: own('category', p.category),
+      subCategory: (p.subCategory as string | null) ?? '',
+      brand: (p.brand as string | null) ?? '',
+      tags: Array.isArray(p.tags) ? p.tags.join(', ') : '',
       stock: String(claim ? claim.stockQty : (inventory.find(i => i.id === p.id)?.stock ?? p.stock)),
       sku: own('sku', p.sku),
       description: own('description', p.description),
@@ -135,6 +141,9 @@ export default function InventoryPage() {
             originalPrice: String(p.originalPrice ?? p.price ?? ''),
             cost: p.cost ? String(p.cost) : '',
             category: p.category ?? 'electronics',
+            subCategory: p.subCategory ?? '',
+            brand: p.brand ?? '',
+            tags: Array.isArray(p.tags) ? p.tags.join(', ') : '',
             stock: String(localStock),
             sku: p.sku ?? '', description: p.description ?? '',
             supplierId: p.supplierId ? String(p.supplierId) : '',
@@ -212,6 +221,9 @@ export default function InventoryPage() {
       originalPrice: form.originalPrice || form.price,
       cost: form.cost || '0',
       category: form.category, stock: form.stock,
+      subCategory: form.subCategory || null,
+      brand:       form.brand.trim() || null,
+      tags:        form.tags ? form.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
       sku: form.sku.trim(), description: form.description.trim(),
       // Default to the signed-in store: a product created with NO supplier is
       // an orphan (supplier_id null) that its own creator can't edit/delete
@@ -566,14 +578,35 @@ export default function InventoryPage() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div className="form-group">
                   <label className="form-label">Category *</label>
-                  <select className="form-input" value={form.category} onChange={e => pf('category', e.target.value)}>
+                  <select className="form-input" value={form.category} onChange={e => { pf('category', e.target.value); pf('subCategory', ''); }}>
                     {CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
                   </select>
                 </div>
                 <div className="form-group">
+                  <label className="form-label">Subcategory</label>
+                  <select className="form-input" value={form.subCategory} onChange={e => pf('subCategory', e.target.value)}>
+                    <option value="">None</option>
+                    {(SUBCATEGORIES[form.category] ?? []).map(s => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div className="form-group">
                   <label className="form-label">Stock Qty</label>
                   <input className="form-input" type="number" min="0" placeholder="0" value={form.stock} onChange={e => pf('stock', e.target.value)} />
                 </div>
+                <div className="form-group">
+                  <label className="form-label">Brand</label>
+                  <input className="form-input" placeholder="Apple, Samsung…" value={form.brand} onChange={e => pf('brand', e.target.value)} />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Tags (comma-separated)</label>
+                <input className="form-input" placeholder="Wireless, USB-C, 5G" value={form.tags} onChange={e => pf('tags', e.target.value)} />
               </div>
 
               {/* SKU is the store's own inventory code, so a claimed listing
@@ -587,10 +620,27 @@ export default function InventoryPage() {
                 {!editingClaim && (
                   <div className="form-group">
                     <label className="form-label">Supplier</label>
-                    <select className="form-input" value={form.supplierId} onChange={e => pf('supplierId', e.target.value)}>
-                      <option value="">None</option>
-                      {suppliers.map(s => <option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}
-                    </select>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      {/* Live avatar of the picked store — a native <option> can't
+                          render an image, so an uploaded logo would otherwise show
+                          as a raw Supabase URL. */}
+                      {(() => {
+                        const picked = suppliers.find(s => String(s.id) === form.supplierId);
+                        return (
+                          <div style={{ width: 38, height: 38, flexShrink: 0, borderRadius: 10, overflow: 'hidden', display: 'grid', placeItems: 'center', fontSize: 22, background: 'var(--bg)', border: '1px solid var(--border)' }}>
+                            <StoreAvatar value={picked?.icon ?? '🏪'} />
+                          </div>
+                        );
+                      })()}
+                      <select className="form-input" style={{ flex: 1 }} value={form.supplierId} onChange={e => pf('supplierId', e.target.value)}>
+                        <option value="">None</option>
+                        {suppliers.map(s => (
+                          <option key={s.id} value={s.id}>
+                            {isLogoUrl(s.icon) ? '🏪' : s.icon} {s.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 )}
               </div>

@@ -31,7 +31,7 @@ function fmtDate(iso: string) {
 
 const PAY_LABEL: Record<string, string> = { cash: '💵 Cash', waafi: '📱 Waafi', card: '💳 Card', sifalo: '📱 Sifalo' };
 
-const emptyForm = { name: '', phone: '', email: '', address: '', notes: '' };
+const emptyForm = { name: '', phone: '', email: '', address: '', gender: '', notes: '' };
 type FormState = typeof emptyForm;
 
 /* ─── Invoice types ──────────────────────────────── */
@@ -159,7 +159,7 @@ export default function CustomersPage() {
   function openAdd() { setEditingId(null); setForm(emptyForm); setShowForm(true); }
   function openEdit(c: Customer) {
     setEditingId(c.id);
-    setForm({ name: c.name, phone: c.phone, email: c.email, address: c.address, notes: c.notes });
+    setForm({ name: c.name, phone: c.phone, email: c.email, address: c.address, gender: c.gender ?? '', notes: c.notes });
     setShowForm(true);
   }
 
@@ -185,7 +185,7 @@ export default function CustomersPage() {
         }
       } catch {}
       /* local fallback */
-      persist(customers.map(c => c.id === editingId ? { ...c, ...form } : c));
+      persist(customers.map(c => c.id === editingId ? { ...c, ...form, gender: form.gender as Customer['gender'] } : c));
       toast('Customer updated ✓', 'success');
     } else {
       /* try API first */
@@ -204,7 +204,7 @@ export default function CustomersPage() {
       } catch {}
       /* local fallback — still usable without DB */
       const newC: Customer = {
-        id: makeId(), ...form, createdAt: new Date().toISOString(),
+        id: makeId(), ...form, gender: form.gender as Customer['gender'], createdAt: new Date().toISOString(),
       };
       persist([newC, ...customers]);
       toast('Customer added ✓', 'success');
@@ -525,7 +525,11 @@ export default function CustomersPage() {
                 {initials(c.name)}
               </div>
               <div className="cust-info">
-                <div className="cust-name">{c.name}</div>
+                <div className="cust-name">
+                  {c.name}
+                  {c.gender === 'male'   && <span title="Male"   style={{ marginLeft: 6, color: '#2563eb' }}>♂</span>}
+                  {c.gender === 'female' && <span title="Female" style={{ marginLeft: 6, color: '#db2777' }}>♀</span>}
+                </div>
                 {c.phone   && <div className="cust-phone">📞 {c.phone}</div>}
                 {c.email   && <div className="cust-detail">✉️ {c.email}</div>}
                 {c.address && <div className="cust-detail">📍 {c.address}</div>}
@@ -598,6 +602,22 @@ export default function CustomersPage() {
                 <div className="form-group">
                   <label className="form-label">Address</label>
                   <input className="form-input" placeholder="City, Street" value={form.address} onChange={e => sf('address', e.target.value)} />
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Gender</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {([['', 'Not specified'], ['male', '♂ Male'], ['female', '♀ Female']] as const).map(([val, label]) => (
+                    <button
+                      key={val || 'none'}
+                      type="button"
+                      className={`btn btn-sm ${form.gender === val ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ flex: 1 }}
+                      onClick={() => sf('gender', val)}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
               </div>
               <div className="form-group">

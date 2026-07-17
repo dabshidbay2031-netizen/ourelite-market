@@ -126,6 +126,7 @@ export default function POSPage() {
   const [showCheckout, setShowCheckout] = useState(false);
   const [checkoutName, setCheckoutName] = useState('Walk-in Customer');
   const [checkoutPhone, setCheckoutPhone] = useState('');
+  const [posDiscount, setPosDiscount] = useState('');  // manual discount ($), staff-applied
   const [splits, setSplits] = useState<Split[]>([{ method: 'cash', amount: '' }]);
   const [placingOrder, setPlacingOrder] = useState(false);
   const [lastOrderId, setLastOrderId] = useState('');
@@ -212,6 +213,13 @@ export default function POSPage() {
   );
   const posItemCount = posCart.reduce((s, i) => s + i.qty, 0);
 
+  // Manual discount, clamped to the subtotal — `posNet` is the amount to charge.
+  const posDiscountNum = useMemo(() => {
+    const d = Math.round((parseFloat(posDiscount) || 0) * 100) / 100;
+    return Math.min(Math.max(d, 0), posTotal);
+  }, [posDiscount, posTotal]);
+  const posNet = useMemo(() => Math.round((posTotal - posDiscountNum) * 100) / 100, [posTotal, posDiscountNum]);
+
   const sessionAge = useMemo(() => {
     if (!session || session === 'loading') return '';
     const ms = now - new Date(session.openedAt).getTime();
@@ -224,7 +232,7 @@ export default function POSPage() {
     () => splits.reduce((s, sp) => s + (parseFloat(sp.amount) || 0), 0),
     [splits]
   );
-  const changeDue = Math.max(0, splitTotal - posTotal);
+  const changeDue = Math.max(0, splitTotal - posNet);
 
   /* ── Session handlers ────────────────────────────────────────── */
   async function handleOpenSession() {
@@ -347,6 +355,7 @@ export default function POSPage() {
   /* ── Checkout handlers ───────────────────────────────────────── */
   function openCheckout() {
     if (!posCart.length) return;
+    setPosDiscount('');
     setSplits([{ method: posSettings.defaultPayment, amount: posTotal.toFixed(2) }]);
     // When Settings require a customer name, don't pre-fill the placeholder —
     // the cashier must type a real one.
@@ -372,8 +381,8 @@ export default function POSPage() {
       toast('Customer name is required (Settings → Point of Sale)', 'error');
       return;
     }
-    if (splitTotal < posTotal - 0.01) {
-      toast(`Still owed $${(posTotal - splitTotal).toFixed(2)} — add more payment`, 'error');
+    if (splitTotal < posNet - 0.01) {
+      toast(`Still owed $${(posNet - splitTotal).toFixed(2)} — add more payment`, 'error');
       return;
     }
 
@@ -382,6 +391,8 @@ export default function POSPage() {
       : splits.map(s => s.method).join('+');
 
     const notesParts: string[] = [];
+    if (posDiscountNum > 0)
+      notesParts.push(`Discount: $${posDiscountNum.toFixed(2)}`);
     if (splits.length > 1)
       notesParts.push(`Split: ${splits.map(s => `${s.method} $${s.amount}`).join(', ')}`);
     if (changeDue > 0.01)
@@ -393,6 +404,7 @@ export default function POSPage() {
       userId:        user?.id ?? null,
       items:         posCart.map(i => ({ id: i.id, qty: i.qty })),
       paymentMethod: payMethod,
+      discount:      posDiscountNum,               // manual staff discount (server clamps + verifies staff)
       sessionId:     session && session !== 'loading' ? session.id   : null,
       cashierName:   session && session !== 'loading' ? session.cashierName : null,
       supplierId:    currentSupplier?.id ?? null,   // this register's store (dashboard attribution)
@@ -402,8 +414,10 @@ export default function POSPage() {
     setPlacingOrder(true);
     let order: { id: string; total: number } | null = null;
     try {
+      // Auth header so the server can verify a staff discount (a public/guest
+      // order can never send a manual discount — it would zero out the total).
       const res = await fetch('/api/orders', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(orderPayload),
       });
       if (res.ok) {
@@ -416,7 +430,7 @@ export default function POSPage() {
       // Offline — queue for later sync
       const localId = enqueueOrder(orderPayload);
       toast(`Offline — sale queued (${localId.slice(0, 12)})`, 'warning');
-      order = { id: localId, total: posTotal };
+      order = { id: localId, total: posNet };
     }
     setPlacingOrder(false);
 
@@ -427,7 +441,7 @@ export default function POSPage() {
         items:    snapshot,
         name:     checkoutName.trim() || 'Walk-in Customer',
         subtotal: posTotal,
-        discount: 0,
+        discount: posDiscountNum,
         total:    order.total,
         method:   payMethod,
       });
@@ -766,8 +780,16 @@ export default function POSPage() {
                     </div>
                   );
                 })}
-                <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 8, fontWeight: 700, display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Total</span><span>${posTotal.toFixed(2)}</span>
+                <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 8, display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '.88rem' }}>
+                  <span>Subtotal</span><span>${posTotal.toFixed(2)}</span>
+                </div>
+                {posDiscountNum > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '.88rem', marginTop: 2 }}>
+                    <span>Discount</span><span>−${posDiscountNum.toFixed(2)}</span>
+                  </div>
+                )}
+                <div style={{ paddingTop: 6, marginTop: 4, fontWeight: 700, display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Total</span><span>${posNet.toFixed(2)}</span>
                 </div>
               </div>
 
@@ -775,6 +797,15 @@ export default function POSPage() {
               <div className="form-group">
                 <label className="form-label">Customer name</label>
                 <input className="form-input" value={checkoutName} onChange={e => setCheckoutName(e.target.value)} placeholder="Walk-in Customer" />
+              </div>
+
+              {/* Manual discount ($ off the subtotal) */}
+              <div className="form-group">
+                <label className="form-label">Discount ($)</label>
+                <input className="form-input" type="number" min="0" step="0.01" max={posTotal}
+                  value={posDiscount}
+                  onChange={e => setPosDiscount(e.target.value)}
+                  placeholder="0.00" />
               </div>
 
               {/* Payment splits */}
@@ -803,7 +834,7 @@ export default function POSPage() {
                   <button className="btn btn-sm btn-secondary" style={{ marginTop: 4 }}
                     onClick={() => setSplits(prev => [...prev, {
                       method: 'cash',
-                      amount: Math.max(0, posTotal - splitTotal).toFixed(2),
+                      amount: Math.max(0, posNet - splitTotal).toFixed(2),
                     }])}>
                     + Split payment
                   </button>
@@ -814,9 +845,9 @@ export default function POSPage() {
                     💵 Change due: <strong>${changeDue.toFixed(2)}</strong>
                   </div>
                 )}
-                {splitTotal > 0 && splitTotal < posTotal - 0.01 && (
+                {splitTotal > 0 && splitTotal < posNet - 0.01 && (
                   <div className="pos-short-display">
-                    Still owed: <strong>${(posTotal - splitTotal).toFixed(2)}</strong>
+                    Still owed: <strong>${(posNet - splitTotal).toFixed(2)}</strong>
                   </div>
                 )}
               </div>
@@ -825,8 +856,8 @@ export default function POSPage() {
                 <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowCheckout(false)}>Back</button>
                 <button className="btn btn-primary" style={{ flex: 1 }}
                   onClick={handlePlaceOrder}
-                  disabled={placingOrder || invoicing || splitTotal < posTotal - 0.01}>
-                  {placingOrder ? 'Processing…' : `Charge $${posTotal.toFixed(2)}`}
+                  disabled={placingOrder || invoicing || splitTotal < posNet - 0.01}>
+                  {placingOrder ? 'Processing…' : `Charge $${posNet.toFixed(2)}`}
                 </button>
               </div>
 

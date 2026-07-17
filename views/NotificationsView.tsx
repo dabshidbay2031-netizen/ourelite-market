@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Header from '@/components/Header';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
-import { isPushSupported, subscribeToPush } from '@/lib/push';
+import { isPushSupported, subscribeToPush, pushReasonMessage } from '@/lib/push';
 
 export default function NotificationsPage() {
   const { state, markAllRead, clearNotifications, toast } = useApp();
@@ -25,14 +25,12 @@ export default function NotificationsPage() {
 
   const enablePush = async () => {
     setEnabling(true);
-    const ok = await subscribeToPush();
+    const { ok, reason } = await subscribeToPush();
     setEnabling(false);
     if (ok) { setPushState('granted'); toast('Push notifications enabled ✓', 'success'); }
     else {
       setPushState(Notification.permission === 'denied' ? 'denied' : 'prompt');
-      toast(Notification.permission === 'denied'
-        ? 'Notifications are blocked in your browser settings'
-        : 'Could not enable notifications', 'error');
+      toast(pushReasonMessage(reason), 'error');
     }
   };
 

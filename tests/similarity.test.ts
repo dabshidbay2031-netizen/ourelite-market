@@ -62,4 +62,37 @@ describe('similarProducts', () => {
     const many = Array.from({ length: 20 }, (_, i) => make({ name: `Item ${i}`, category: 'food' }));
     expect(similarProducts(viewed, many, 8)).toHaveLength(8);
   });
+
+  it('surfaces up to 12 similar by default (was 8)', () => {
+    const viewed = make({ name: 'Snack', category: 'food', tags: ['organic'] });
+    const many = Array.from({ length: 30 }, (_, i) => make({ name: `Food ${i}`, category: 'food', tags: ['organic'] }));
+    expect(similarProducts(viewed, many)).toHaveLength(12);
+  });
+
+  it('includes ALL same-category products that share a tag', () => {
+    const viewed = make({ name: 'Green Tea', category: 'food', tags: ['tea', 'organic'] });
+    const shareTag = Array.from({ length: 15 }, (_, i) => make({ name: `Blend ${i}`, category: 'food', tags: ['tea'] }));
+    const other    = make({ name: 'Motor Oil', category: 'home' }); // unrelated
+    const result = similarProducts(viewed, [...shareTag, other], 100);
+    // every tag-sharing same-category item is returned; the unrelated one isn't
+    expect(result).toHaveLength(15);
+    expect(result.map(p => p.id)).not.toContain(other.id);
+  });
+
+  it('ranks same-category + shared-tag above same-category alone', () => {
+    const viewed   = make({ name: 'Running Shoes', category: 'fashion', tags: ['sport', 'shoes'] });
+    const sharesTag = make({ name: 'Trainers', category: 'fashion', tags: ['shoes'] });
+    const catOnly   = make({ name: 'Hat', category: 'fashion' });
+    const result = similarProducts(viewed, [catOnly, sharesTag]);
+    expect(result[0].id).toBe(sharesTag.id);
+  });
+
+  it('counts a shared brand as a real signal', () => {
+    const viewed = make({ name: 'Phone', category: 'electronics', brand: 'Acme' });
+    const sameBrand = make({ name: 'Charger', category: 'accessories', brand: 'Acme', tags: ['acme-power'] });
+    const noBrand   = make({ name: 'Charger', category: 'accessories' }); // different cat, no signal
+    const result = similarProducts(viewed, [noBrand, sameBrand]);
+    expect(result.map(p => p.id)).toContain(sameBrand.id);
+    expect(result.map(p => p.id)).not.toContain(noBrand.id);
+  });
 });

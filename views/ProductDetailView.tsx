@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from '@/lib/hashRouter';
+import { storePath } from '@/lib/slug';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { authHeaders } from '@/lib/clientAuth';
@@ -154,8 +155,10 @@ export default function ProductDetailPage() {
   const isOwnProduct = currentSupplier != null && product.supplierId === currentSupplier.id;
   const isWishlisted = state.wishlist.includes(product.id);
   const supplier     = suppliers.find(s => s.id === product.supplierId);
-  // Ranked by shared tags > shared name words > same subcategory > same category
-  const similar      = similarProducts(product, products, 8);
+  // Ranked by shared tags > shared name words > subcategory > brand > category.
+  // Shows as many genuinely-related items as possible (same category + shared
+  // tags rank highest), capped generously for the "You may also like" shelf.
+  const similar      = similarProducts(product, products, 20);
   const color        = getCategoryColor(product.category);
   const bgStyle      = { background: `linear-gradient(135deg, ${hexToRgba(color, 0.12)}, ${hexToRgba(color, 0.06)})` };
   const pct          = discountPct(product.price, product.originalPrice);
@@ -355,7 +358,7 @@ export default function ProductDetailPage() {
             <button
               className="meta-chip"
               style={{ cursor:'pointer', color:'var(--primary)', fontWeight:600 }}
-              onClick={() => router.push(`/supplier/${supplier.id}`)}
+              onClick={() => router.push(storePath(supplier))}
             >
               🏭 {supplier.name}
               {supplier.verified && ' ✓'}

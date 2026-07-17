@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from '@/lib/hashRouter';
+import { storePath } from '@/lib/slug';
 import Header from '@/components/Header';
 import { authHeaders } from '@/lib/clientAuth';
 import { useApp } from '@/context/AppContext';
@@ -125,7 +126,7 @@ export default function SuppliersPage() {
             return (
               <div key={supplier.id} className="supplier-card">
                 {/* Clickable header */}
-                <div className="supplier-banner" style={{ cursor:'pointer' }} onClick={() => router.push(`/supplier/${supplier.id}`)}>
+                <div className="supplier-banner" style={{ cursor:'pointer' }} onClick={() => router.push(storePath(supplier))}>
                   <div className="supplier-logo"><StoreAvatar value={supplier.icon} /></div>
                   <div className="supplier-info">
                     <div className="supplier-name">{supplier.name}</div>
@@ -168,7 +169,7 @@ export default function SuppliersPage() {
                 )}
 
                 <div className="supplier-footer">
-                  <button className="btn btn-outline btn-sm" onClick={() => router.push(`/supplier/${supplier.id}`)}>View Profile</button>
+                  <button className="btn btn-outline btn-sm" onClick={() => router.push(storePath(supplier))}>View Profile</button>
                   <button className="btn btn-ghost btn-sm crud-edit-btn" onClick={() => openEdit(supplier)}>✏️ Edit</button>
                   <button
                     className="btn btn-ghost btn-sm crud-del-btn"

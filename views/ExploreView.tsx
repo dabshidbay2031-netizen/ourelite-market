@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from '@/lib/hashRouter';
 import Header from '@/components/Header';
 import ProductCard from '@/components/ProductCard';
@@ -9,7 +9,6 @@ import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { CATEGORIES, SUBCATEGORIES } from '@/lib/data';
 import { useClaimProduct } from '@/lib/useClaimProduct';
-import { useIncrementalList } from '@/lib/useIncrementalList';
 import { useShuffleSeed } from '@/lib/shuffle';
 import { personalizeMix, useAffinity, useRecordInterest } from '@/lib/affinity';
 import { useHeroBanner } from '@/lib/useHeroBanner';
@@ -104,9 +103,37 @@ export default function ExplorePage() {
     [...products].sort((a, b) => b.sold - a.sold).slice(0, 8),
   [products]);
 
-  // Render the grid in slices — mounting all 600+ cards at once froze first paint
-  const { visible, hasMore, sentinelRef } =
-    useIncrementalList(filtered, `${search}|${activeCategory}|${activeSub}|${activeDistrict}`);
+  // ── Pagination: 300 products per page ─────────────────────────
+  // Replaces infinite scroll — a bounded page keeps the DOM small (≤300 cards
+  // instead of the whole catalog) and gives clear Prev/Next controls.
+  const PAGE_SIZE = 300;
+  const [page, setPage] = useState(1);
+  const filterKey = `${search}|${activeCategory}|${activeSub}|${activeDistrict}`;
+  // A new filter/search always starts back on page 1.
+  useEffect(() => { setPage(1); }, [filterKey]);
+
+  const totalPages = Math.max(Math.ceil(filtered.length / PAGE_SIZE), 1);
+  const safePage   = Math.min(page, totalPages);
+  const pageStart  = (safePage - 1) * PAGE_SIZE;
+  const visible     = filtered.slice(pageStart, pageStart + PAGE_SIZE);
+
+  const goToPage = (n: number) => {
+    const clamped = Math.min(Math.max(n, 1), totalPages);
+    setPage(clamped);
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Compact page-number window around the current page (… for gaps).
+  const pageNumbers = useMemo<(number | '…')[]>(() => {
+    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    const out: (number | '…')[] = [1];
+    const lo = Math.max(2, safePage - 1), hi = Math.min(totalPages - 1, safePage + 1);
+    if (lo > 2) out.push('…');
+    for (let i = lo; i <= hi; i++) out.push(i);
+    if (hi < totalPages - 1) out.push('…');
+    out.push(totalPages);
+    return out;
+  }, [totalPages, safePage]);
 
   return (
     <div className="page-anim">
@@ -242,7 +269,11 @@ export default function ExplorePage() {
             <span style={{ color: 'var(--primary)', fontWeight: 700 }}> · 📍 {activeDistrict}</span>
           )}
         </span>
-        <span className="text-muted text-sm">{filtered.length} items</span>
+        <span className="text-muted text-sm">
+          {filtered.length > PAGE_SIZE
+            ? `${pageStart + 1}–${Math.min(pageStart + PAGE_SIZE, filtered.length)} of ${filtered.length}`
+            : `${filtered.length} items`}
+        </span>
       </div>
 
       {loading ? (
@@ -284,10 +315,42 @@ export default function ExplorePage() {
               />
             ))}
           </div>
-          {hasMore && (
-            <div ref={sentinelRef} className="empty-state" style={{ padding: 24 }}>
-              <div className="spinner" style={{ width: 22, height: 22 }} />
-            </div>
+
+          {totalPages > 1 && (
+            <nav className="pagination" aria-label="Product pages">
+              <button
+                className="page-btn"
+                onClick={() => goToPage(safePage - 1)}
+                disabled={safePage === 1}
+                aria-label="Previous page"
+              >
+                ← Prev
+              </button>
+
+              {pageNumbers.map((n, i) =>
+                n === '…' ? (
+                  <span key={`gap-${i}`} className="page-gap">…</span>
+                ) : (
+                  <button
+                    key={n}
+                    className={`page-btn${n === safePage ? ' active' : ''}`}
+                    onClick={() => goToPage(n)}
+                    aria-current={n === safePage ? 'page' : undefined}
+                  >
+                    {n}
+                  </button>
+                )
+              )}
+
+              <button
+                className="page-btn"
+                onClick={() => goToPage(safePage + 1)}
+                disabled={safePage === totalPages}
+                aria-label="Next page"
+              >
+                Next →
+              </button>
+            </nav>
           )}
         </>
       )}

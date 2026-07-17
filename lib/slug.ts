@@ -28,6 +28,15 @@ export const RESERVED_SLUGS = new Set([
   'official', 'null', 'undefined',
 ]);
 
+/**
+ * The in-app path to a store's storefront — its clean slug when it has one
+ * (`/city-care-pharmacy`), falling back to `/supplier/:id`. Use this instead
+ * of hard-coding `/supplier/${id}` so links read as the store's own name.
+ */
+export function storePath(store: { slug?: string | null; id: number }): string {
+  return store.slug ? `/${store.slug}` : `/supplier/${store.id}`;
+}
+
 /** Turn a store name into a URL-safe slug: "City Care Pharmacy!" → "city-care-pharmacy". */
 export function slugify(name: string): string {
   return String(name ?? '')

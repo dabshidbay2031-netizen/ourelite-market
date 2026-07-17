@@ -41,8 +41,20 @@ function mapPayout(r: Record<string, unknown>): Payout {
   };
 }
 
-/** This store's share of confirmed online payments, priced the same way the
- *  dashboard does (claimed custom price, else the catalog price). */
+/**
+ * This store's share of confirmed online payments — valued at the price
+ * recorded AT SALE TIME, never the current price.
+ *
+ * For an attributed order (orders.supplier_id — v3.7+, and checkout is
+ * per-shop) the whole order was this store's sale, so we use the stored
+ * `subtotal` snapshot. That closes a real exploit: previously the balance was
+ * recomputed as Σ(CURRENT price × qty), so a seller could raise their price and
+ * retroactively inflate their withdrawable balance beyond what was collected.
+ *
+ * Legacy orders with no attribution fall back to item-matching; there we prefer
+ * a price snapshotted on the line item and only use the current price if none
+ * was stored (pre-fix rows).
+ */
 async function computeOnlineTotal(sb: SB, supplierId: number): Promise<number> {
   const [{ data: owned }, { data: claims }] = await Promise.all([
     sb.from('products').select('id, price').eq('supplier_id', supplierId),
@@ -51,20 +63,33 @@ async function computeOnlineTotal(sb: SB, supplierId: number): Promise<number> {
   const priceById = new Map<number, number>();
   for (const p of owned ?? [])  priceById.set(p.id as number,         Number(p.price) || 0);
   for (const c of claims ?? []) priceById.set(c.product_id as number, Number(c.custom_price) || 0); // claim overrides
-  if (priceById.size === 0) return 0;
 
   const { data: orders } = await sb
-    .from('orders').select('items, payment_method, status')
+    .from('orders').select('items, payment_method, status, supplier_id, subtotal')
     .order('created_at', { ascending: false }).limit(1000);
 
   let total = 0;
   for (const o of orders ?? []) {
     if (!ONLINE_METHODS.has(String(o.payment_method))) continue;
     if (NON_REVENUE_STATUSES.has(String(o.status))) continue;
+
+    const attributed = (o as { supplier_id?: number | null }).supplier_id;
+    if (attributed != null) {
+      // Snapshot path: trust the amount recorded at sale time.
+      if (Number(attributed) === supplierId) total += Number(o.subtotal) || 0;
+      continue; // an attributed order belongs to exactly one store
+    }
+
+    // Legacy fallback (no attribution): match this store's items. Prefer the
+    // price frozen on the line item; only reach for the current price if the
+    // order predates the snapshot.
+    if (priceById.size === 0) continue;
     const items = Array.isArray(o.items) ? o.items : [];
     for (const it of items) {
-      const price = priceById.get((it as { id: number }).id);
-      if (price != null) total += price * (Number((it as { qty: number }).qty) || 0);
+      const line = it as { id: number; qty: number; price?: number };
+      const snap = line.price;
+      const price = snap != null && Number.isFinite(Number(snap)) ? Number(snap) : priceById.get(line.id);
+      if (price != null) total += price * (Number(line.qty) || 0);
     }
   }
   return Math.round(total * 100) / 100;

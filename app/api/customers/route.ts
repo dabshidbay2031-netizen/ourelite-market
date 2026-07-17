@@ -1,7 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { getAuthUser, isAdminUser, ownsStoreOrAdmin, ownedStoreId, requireAdmin } from '@/lib/apiAuth';
-import { errMsg } from '@/lib/apiHelpers';
+import { errMsg, isMissingColumnError } from '@/lib/apiHelpers';
+
+/** Accept only male/female; anything else (incl. empty) is stored as '' (unspecified). */
+export function normGender(v: unknown): 'male' | 'female' | '' {
+  const g = String(v ?? '').trim().toLowerCase();
+  return g === 'male' || g === 'female' ? g : '';
+}
 
 function map(c: Record<string, unknown>) {
   return {
@@ -10,6 +16,7 @@ function map(c: Record<string, unknown>) {
     phone:      c.phone     ?? '',
     email:      c.email     ?? '',
     address:    c.address   ?? '',
+    gender:     (c.gender as string | undefined) ?? '',
     notes:      c.notes     ?? '',
     supplierId: c.supplier_id ?? null,
     createdAt:  c.created_at ?? new Date().toISOString(),
@@ -105,18 +112,25 @@ export async function POST(req: Request) {
     }
   }
 
+  const payload: Record<string, unknown> = {
+    name,
+    phone:   typeof body.phone   === 'string' ? body.phone.trim()   : '',
+    email:   typeof body.email   === 'string' ? body.email.trim()   : '',
+    address: typeof body.address === 'string' ? body.address.trim() : '',
+    gender:  normGender(body.gender),
+    notes:   typeof body.notes   === 'string' ? body.notes.trim()   : '',
+    supplier_id: supplierId,
+  };
+
   try {
-    const { data, error } = await getSupabaseAdmin()
-      .from('customers')
-      .insert({
-        name,
-        phone:   typeof body.phone   === 'string' ? body.phone.trim()   : '',
-        email:   typeof body.email   === 'string' ? body.email.trim()   : '',
-        address: typeof body.address === 'string' ? body.address.trim() : '',
-        notes:   typeof body.notes   === 'string' ? body.notes.trim()   : '',
-        supplier_id: supplierId,
-      })
-      .select().single();
+    const sb = getSupabaseAdmin();
+    let { data, error } = await sb.from('customers').insert(payload).select().single();
+    // Pre-migration DB without the `gender` column — drop it and retry so the
+    // customer still saves (run migration_customer_gender.sql to persist gender).
+    if (error && isMissingColumnError(error)) {
+      delete payload.gender;
+      ({ data, error } = await sb.from('customers').insert(payload).select().single());
+    }
     if (error) throw error;
     return NextResponse.json(map(data as Record<string, unknown>), { status: 201 });
   } catch (e) {

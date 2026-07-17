@@ -190,6 +190,53 @@ describe('GET /api/products', () => {
     expect(body).toHaveLength(1);
     expect(body[0].id).toBe(2);
   });
+
+  it('un-paged call still returns a flat array (backward compatible)', async () => {
+    fromResults.products = { data: [productRow], error: null };
+    const body = await (await productsGet(new Request('http://test/api/products'))).json();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  it('?page= returns a pagination envelope with 300 default page size', async () => {
+    const rows = Array.from({ length: 750 }, (_, i) => ({ ...productRow, id: i + 1 }));
+    fromResults.products = { data: rows, error: null };
+    const body = await (await productsGet(new Request('http://test/api/products?page=1'))).json();
+    expect(body.pageSize).toBe(300);
+    expect(body.total).toBe(750);
+    expect(body.totalPages).toBe(3);
+    expect(body.items).toHaveLength(300);
+    expect(body.hasMore).toBe(true);
+  });
+
+  it('?page=3 returns the last, partial page', async () => {
+    const rows = Array.from({ length: 750 }, (_, i) => ({ ...productRow, id: i + 1 }));
+    fromResults.products = { data: rows, error: null };
+    const body = await (await productsGet(new Request('http://test/api/products?page=3'))).json();
+    expect(body.items).toHaveLength(150);
+    expect(body.hasMore).toBe(false);
+    expect(body.items[0].id).toBe(601);
+  });
+
+  it('page size is capped at 500', async () => {
+    const rows = Array.from({ length: 600 }, (_, i) => ({ ...productRow, id: i + 1 }));
+    fromResults.products = { data: rows, error: null };
+    const body = await (await productsGet(new Request('http://test/api/products?page=1&pageSize=99999'))).json();
+    expect(body.pageSize).toBe(500);
+    expect(body.items).toHaveLength(500);
+  });
+
+  it('?similarTo= returns related products, not the product itself', async () => {
+    fromResults.products = { data: [
+      { ...productRow, id: 1, name: 'Solar Lamp',   category: 'electronics', tags: ['solar'] },
+      { ...productRow, id: 2, name: 'Solar Panel',  category: 'electronics', tags: ['solar'] }, // shares tag+cat
+      { ...productRow, id: 3, name: 'Banana Bunch', category: 'food',        tags: [], brand: null }, // unrelated
+    ], error: null };
+    const body = await (await productsGet(new Request('http://test/api/products?similarTo=1'))).json();
+    const ids = body.map((p: { id: number }) => p.id);
+    expect(ids).toContain(2);
+    expect(ids).not.toContain(1);
+    expect(ids).not.toContain(3);
+  });
 });
 
 /* ── GET /api/suppliers?slug= — storefront lookup ────────────── */

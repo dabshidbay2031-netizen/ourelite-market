@@ -5,7 +5,7 @@ import Header from '@/components/Header';
 import { Link, useRouter } from '@/lib/hashRouter';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
-import { isPushSupported, subscribeToPush, unsubscribeFromPush } from '@/lib/push';
+import { isPushSupported, subscribeToPush, unsubscribeFromPush, pushReasonMessage } from '@/lib/push';
 
 const STORAGE_KEY = 'mogarenta_settings';
 
@@ -100,9 +100,9 @@ export default function SettingsPage() {
     const turnOn = pushState === 'off';
     setPushState('busy');
     if (turnOn) {
-      const ok = await subscribeToPush();
+      const { ok, reason } = await subscribeToPush();
       setPushState(ok ? 'on' : 'off');
-      toast(ok ? 'Push notifications enabled ✓' : 'Could not enable — allow notifications in your browser', ok ? 'success' : 'error');
+      toast(ok ? 'Push notifications enabled ✓' : pushReasonMessage(reason), ok ? 'success' : 'error');
     } else {
       await unsubscribeFromPush();
       setPushState('off');

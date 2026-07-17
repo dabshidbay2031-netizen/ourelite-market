@@ -32,5 +32,16 @@ export function useChatUnread(): number {
   useEffect(() => { load(); }, [load, pathname]);
   useRealtimePing([user ? `user:${user.id}` : null], load);
 
+  // Polling fallback: realtime broadcast isn't always available, so without
+  // this the badge would only update when the user navigates. Poll every 20s
+  // (and immediately when the tab regains focus) so the count stays live.
+  useEffect(() => {
+    if (!user) return;
+    const id = setInterval(load, 20000);
+    const onFocus = () => load();
+    window.addEventListener('focus', onFocus);
+    return () => { clearInterval(id); window.removeEventListener('focus', onFocus); };
+  }, [user, load]);
+
   return count;
 }

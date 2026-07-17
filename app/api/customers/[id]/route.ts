@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { requireCustomerOwner } from '@/lib/apiAuth';
-import { errMsg } from '@/lib/apiHelpers';
+import { errMsg, isMissingColumnError } from '@/lib/apiHelpers';
+import { normGender } from '@/app/api/customers/route';
 
 function map(c: Record<string, unknown>) {
   return {
@@ -10,6 +11,7 @@ function map(c: Record<string, unknown>) {
     phone:      c.phone     ?? '',
     email:      c.email     ?? '',
     address:    c.address   ?? '',
+    gender:     (c.gender as string | undefined) ?? '',
     notes:      c.notes     ?? '',
     supplierId: c.supplier_id ?? null,
     createdAt:  c.created_at ?? new Date().toISOString(),
@@ -33,6 +35,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (body.phone   !== undefined) updates.phone   = String(body.phone).trim();
   if (body.email   !== undefined) updates.email   = String(body.email).trim();
   if (body.address !== undefined) updates.address = String(body.address).trim();
+  if (body.gender  !== undefined) updates.gender  = normGender(body.gender);
   if (body.notes   !== undefined) updates.notes   = String(body.notes).trim();
   // supplier_id is intentionally NOT updatable — a store cannot reassign a
   // customer to (or steal one from) another store.
@@ -41,8 +44,16 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
 
   try {
-    const { data, error } = await getSupabaseAdmin()
-      .from('customers').update(updates).eq('id', id).select().single();
+    const sb = getSupabaseAdmin();
+    let { data, error } = await sb.from('customers').update(updates).eq('id', id).select().single();
+    // Pre-migration DB without `gender` — drop it and retry so other edits save.
+    if (error && isMissingColumnError(error) && 'gender' in updates) {
+      delete updates.gender;
+      if (Object.keys(updates).length === 0) {
+        return NextResponse.json({ error: 'Gender needs migration_customer_gender.sql', needsMigration: true }, { status: 400 });
+      }
+      ({ data, error } = await sb.from('customers').update(updates).eq('id', id).select().single());
+    }
     if (error) throw error;
     return NextResponse.json(map(data as Record<string, unknown>));
   } catch (e) {

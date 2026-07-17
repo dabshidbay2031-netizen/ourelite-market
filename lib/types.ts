@@ -210,6 +210,7 @@ export interface Customer {
   phone:     string;
   email:     string;
   address:   string;
+  gender?:   'male' | 'female' | '';
   notes:     string;
   createdAt: string;
 }

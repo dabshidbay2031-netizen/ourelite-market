@@ -12,7 +12,7 @@ import { authHeaders } from '@/lib/clientAuth';
 import { mapsDirectionsUrl } from '@/lib/maps';
 import StoreAvatar, { isLogoUrl } from '@/components/StoreAvatar';
 import { computeCommission, tierProgress } from '@/lib/agentCommission';
-import { slugify, isValidSlug, RESERVED_SLUGS } from '@/lib/slug';
+import { slugify, isValidSlug, RESERVED_SLUGS, storePath } from '@/lib/slug';
 import { useMyProductIds } from '@/lib/useMyProductIds';
 import { isRevenueOrder } from '@/lib/revenue';
 import type { Product, BusinessProduct } from '@/lib/types';
@@ -94,11 +94,14 @@ function ReferralCard({ userId }: { userId: string }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`/api/referrals?userId=${userId}`)
-      .then(r => r.json())
-      .then(d => { if (d.code) setCode(d.code); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    (async () => {
+      try {
+        const r = await fetch(`/api/referrals?userId=${userId}`, { headers: await authHeaders() });
+        const d = await r.json();
+        if (d.code) setCode(d.code);
+      } catch { /* ignore */ }
+      finally { setLoading(false); }
+    })();
   }, [userId]);
 
   const link   = typeof window !== 'undefined'
@@ -206,6 +209,7 @@ export default function ProfilePage() {
   const [locating,     setLocating]     = useState(false);
   const [hideStock,    setHideStock]    = useState(false);
   const [onlineOnly,   setOnlineOnly]   = useState(false);
+  const [deliveryDays, setDeliveryDays] = useState('');
   const [savingBiz,    setSavingBiz]    = useState(false);
   const [savedBiz,     setSavedBiz]     = useState(false);
 
@@ -275,6 +279,7 @@ export default function ProfilePage() {
       setLng(currentSupplier.longitude ?? null);
       setHideStock(currentSupplier.hideStock ?? false);
       setOnlineOnly(currentSupplier.onlineOnly ?? false);
+      setDeliveryDays(currentSupplier.deliveryDays ?? '');
       setBizSlug(currentSupplier.slug ?? '');
       const nums = currentSupplier.contactNumbers ?? [];
       setContacts(nums.length > 0 ? nums : ['']);
@@ -443,6 +448,7 @@ export default function ProfilePage() {
           slug:           slug || null,
           hideStock,
           onlineOnly,
+          deliveryDays:   deliveryDays.trim(),
         }),
       });
       if (!res.ok) {
@@ -1238,7 +1244,7 @@ export default function ProfilePage() {
             <div className="biz-stat-val">{currentSupplier?.reviews ?? 0}</div>
             <div className="biz-stat-lbl">Reviews</div>
           </div>
-          <div className="biz-stat" style={{ cursor:'pointer' }} onClick={() => router.push(`/supplier/${currentSupplier?.id}`)}>
+          <div className="biz-stat" style={{ cursor:'pointer' }} onClick={() => currentSupplier && router.push(storePath(currentSupplier))}>
             <div className="biz-stat-val">👁️</div>
             <div className="biz-stat-lbl">View Store</div>
           </div>
@@ -1491,6 +1497,14 @@ export default function ProfilePage() {
               <div className="form-group">
                 <label className="form-label">Business Name</label>
                 <input className="form-input" value={bizName} onChange={e => setBizName(e.target.value)} placeholder="Your business name" />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Delivery time</label>
+                <input className="form-input" value={deliveryDays} onChange={e => setDeliveryDays(e.target.value)} placeholder="e.g. 2-4 days, same day" />
+                <div style={{ fontSize: '.75rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                  Shown to customers on your storefront and products.
+                </div>
               </div>
 
               <div className="form-group">

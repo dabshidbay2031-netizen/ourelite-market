@@ -3,6 +3,8 @@ import { getSupabaseAdmin } from '@/lib/supabase';
 import { requireStaff } from '@/lib/apiAuth';
 import { errMsg, isMissingColumnError, isForeignKeyError, jsonWithEtag } from '@/lib/apiHelpers';
 import { pingRealtime } from '@/lib/realtimeServer';
+import { similarProducts } from '@/lib/similarity';
+import type { Product } from '@/lib/types';
 
 function mapProduct(p: Record<string, unknown>) {
   const id      = typeof p.id === 'number' ? p.id : parseInt(String(p.id), 10);
@@ -70,16 +72,24 @@ async function getCatalogFromDB(): Promise<ReturnType<typeof mapProduct>[] | nul
   }
 }
 
+const DEFAULT_PAGE_SIZE = 300;
+const MAX_PAGE_SIZE     = 500;
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const barcode    = searchParams.get('barcode');
   const category   = searchParams.get('category');
   const q          = searchParams.get('q');
   const supplierId = searchParams.get('supplierId');
+  const similarTo  = searchParams.get('similarTo');
+  const pageParam  = searchParams.get('page');
 
-  const CACHE = { 'Cache-Control': 'public, s-maxage=10, stale-while-revalidate=30' };
+  // Edge-cacheable: the first shopper in a region pays the origin+DB cost, then
+  // Vercel serves everyone else from the edge for a minute (and stale for 5 more
+  // while it refreshes). Combined with the ETag, repeat visitors get a 0-byte 304.
+  const CACHE = { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300' };
 
-  // ── Supplier product filter ───────────────────────────────────
+  // ── Supplier product filter (full fields — inventory/dashboard need them) ──
   if (supplierId) {
     try {
       const { data, error } = await getSupabaseAdmin()
@@ -98,18 +108,48 @@ export async function GET(req: Request) {
         .from('products').select('*').eq('barcode', barcode).maybeSingle();
       if (data) return NextResponse.json(mapProduct(data as Record<string, unknown>));
     } catch { /* fall through */ }
-
-    // Not in DB — not found
     return NextResponse.json(null, { status: 404 });
   }
 
   // ── Build catalog purely from DB ─────────────────────────────
   const catalog = await getCatalogFromDB();
+  const all = catalog ?? []; // DB unreachable → empty (never static seed)
 
-  // DB unreachable → return empty (never show static seed products)
-  let result = catalog ?? [];
+  // ── "Similar products" — computed over the WHOLE catalog ──────
+  // Returns as many genuinely-related items as possible (same category +
+  // shared tags rank highest); independent of what the client has paged in.
+  if (similarTo) {
+    const id = parseInt(similarTo, 10);
+    const allP = all as unknown as Product[];
+    const base = allP.find(p => p.id === id);
+    if (!base) return jsonWithEtag(req, [], CACHE);
+    const limit = Math.min(Math.max(parseInt(searchParams.get('limit') ?? '24', 10) || 24, 1), 100);
+    return jsonWithEtag(req, similarProducts(base, allP, limit), CACHE);
+  }
+
+  // ── Apply filters (before paging) ─────────────────────────────
+  let result = all;
   if (category) result = result.filter(p => p.category === category);
   if (q)        result = result.filter(p => matchesQuery(p, q));
+
+  // ── Server-side pagination (opt-in via ?page) ─────────────────
+  // Default 300 per page. Returns an envelope; the un-paged call still
+  // returns a flat array so existing in-memory consumers keep working.
+  if (pageParam !== null) {
+    const page     = Math.max(parseInt(pageParam, 10) || 1, 1);
+    const pageSize = Math.min(Math.max(parseInt(searchParams.get('pageSize') ?? String(DEFAULT_PAGE_SIZE), 10) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+    const total    = result.length;
+    const start    = (page - 1) * pageSize;
+    const items    = result.slice(start, start + pageSize);
+    return jsonWithEtag(req, {
+      items,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.max(Math.ceil(total / pageSize), 1),
+      hasMore: start + pageSize < total,
+    }, CACHE);
+  }
 
   return jsonWithEtag(req, result, CACHE);
 }

@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect, Suspense, lazy } from 'react';
 import { useSearchParams, useRouter } from '@/lib/hashRouter';
+import { storePath } from '@/lib/slug';
 import ProductCard from '@/components/ProductCard';
 import ProductImage from '@/components/ProductImage';
 import { useApp } from '@/context/AppContext';
@@ -534,7 +535,7 @@ function SearchInner() {
           {matchingStores.map(s => (
             <div
               key={s.id}
-              onClick={() => router.push(s.slug ? `/${s.slug}` : `/supplier/${s.id}`)}
+              onClick={() => router.push(storePath(s))}
               style={{
                 display: 'flex', gap: 12, alignItems: 'center',
                 padding: '10px 12px', marginBottom: 8, cursor: 'pointer',

@@ -405,6 +405,39 @@ ul { list-style: none; }
   gap: 12px;
   padding: 0 16px 24px;
 }
+
+/* ── Pagination (Explore grid) ─────────────────────────────── */
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px 32px;
+}
+.page-btn {
+  min-width: 38px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 10px;
+  font-size: .88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .14s, border-color .14s, color .14s;
+}
+.page-btn:hover:not(:disabled):not(.active) { background: var(--bg); border-color: var(--primary); }
+.page-btn.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  cursor: default;
+}
+.page-btn:disabled { opacity: .45; cursor: not-allowed; }
+.page-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.page-gap { min-width: 22px; text-align: center; color: var(--text-muted); font-weight: 700; }
 /* Staggered entrance — first 12 cards cascade in, rest appear instantly */
 .product-grid > * { animation: cardIn .45s var(--ease-out) backwards; }
 .product-grid > *:nth-child(1)  { animation-delay: .03s; }

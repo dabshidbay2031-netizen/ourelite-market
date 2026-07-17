@@ -1,47 +1,33 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter, useParams } from '@/lib/hashRouter';
+import { useParams, useRouter } from '@/lib/hashRouter';
+import SupplierProfilePage from '@/views/SupplierProfileView';
 
 // Paths that can never be seller storefront slugs
 const RESERVED = new Set([
-  'orders','profile','checkout','search','auth','api','chat',
-  'customers','dashboard','inventory','notifications','pos',
-  'product','settings','supplier','suppliers','admin',
+  'orders','profile','checkout','search','auth','api','chat','billing',
+  'customers','dashboard','inventory','notifications','pos','my-dashboard',
+  'product','settings','supplier','suppliers','admin','staff','cashier-login',
+  'privacy','terms','wishlist',
 ]);
 
 /**
- * #/:slug — Seller storefront shortcut (final catch-all hash route).
- * Looks up the supplier by slug and redirects to their public profile.
- * Example: /#/techvault → /#/supplier/1
+ * #/:slug — seller storefront at a CLEAN url (also the app's not-found fallback).
+ *
+ * The store renders IN PLACE so the address stays `/#/store-name` (or the
+ * top-level `hamarmall.com/store-name`). It used to redirect to
+ * `/#/supplier/<id>`, which is what made storefront links show the ugly
+ * `/supplier/23` instead of the store's own name.
  */
 export default function SlugView() {
   const { slug } = useParams<{ slug: string }>();
   const router   = useRouter();
-  const [notFound, setNotFound] = useState(false);
+  const s = (slug ?? '').trim().toLowerCase();
 
-  useEffect(() => {
-    const s = (slug ?? '').toLowerCase();
-    if (!s || RESERVED.has(s)) { setNotFound(true); return; }
-
-    let cancelled = false;
-    fetch(`/api/suppliers?slug=${encodeURIComponent(s)}`)
-      .then(r => (r.ok ? r.json() : null))
-      .then(data => {
-        if (cancelled) return;
-        if (data?.id) router.replace(`/supplier/${data.id}`);
-        else setNotFound(true);
-      })
-      .catch(() => { if (!cancelled) setNotFound(true); });
-    return () => { cancelled = true; };
-  }, [slug]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (!notFound) {
-    return (
-      <div className="empty-state" style={{ marginTop: 80 }}>
-        <div className="spinner" style={{ width: 28, height: 28 }} />
-      </div>
-    );
+  if (s && !RESERVED.has(s)) {
+    // SupplierProfilePage resolves the store by slug and shows its own
+    // "Business not found" if the slug matches nothing.
+    return <SupplierProfilePage slug={s} />;
   }
 
   return (

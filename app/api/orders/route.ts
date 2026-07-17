@@ -125,38 +125,19 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'Forbidden — not your store' }, { status: 403 });
     }
     try {
-      // A store's sellable products are BOTH the ones it owns
-      // (products.supplier_id) AND the ones it claims from a wholesaler
-      // (business_products). Claim-model businesses own nothing, so without
-      // the claims their orders would never match.
-      const sb = getSupabaseAdmin();
-      const [{ data: prodData }, { data: claimData }] = await Promise.all([
-        sb.from('products').select('id').eq('supplier_id', supplierId),
-        sb.from('business_products').select('product_id').eq('supplier_id', supplierId),
-      ]);
-      const supplierProductIds = new Set<number>([
-        ...((prodData  ?? []).map((p: Record<string, unknown>) => p.id         as number)),
-        ...((claimData ?? []).map((c: Record<string, unknown>) => c.product_id as number)),
-      ]);
-
-      // Recent orders only — items live in JSONB so filtering happens here.
+      // A store sees ONLY the orders attributed to it (orders.supplier_id,
+      // stamped by checkout / POS / invoicing). We deliberately do NOT fall
+      // back to matching an order's items against the store's product ids:
+      // catalog product ids are shared across stores (and were re-used when the
+      // catalog was reseeded), so item-matching leaked every other store's
+      // orders into this store's list.
       const { data: orderData, error } = await getSupabaseAdmin()
         .from('orders').select('*')
+        .eq('supplier_id', supplierId)
         .order('created_at', { ascending: false })
         .limit(500);
       if (error) throw error;
-
-      const filtered = (orderData ?? []).filter(o => {
-        // Attributed orders (v3.7+): the order KNOWS which store sold it —
-        // trust that and nothing else, so Store A never sees Store B's sale
-        // of the same claimed catalog product.
-        const attributed = (o as Record<string, unknown>).supplier_id;
-        if (attributed != null) return Number(attributed) === supplierId;
-        // Legacy orders (no attribution): fall back to item matching.
-        const items = Array.isArray(o.items) ? o.items : [];
-        return items.some((item: Record<string, unknown>) => supplierProductIds.has(item.id as number));
-      });
-      return NextResponse.json(filtered.map(o => mapOrder(o as Record<string, unknown>)));
+      return NextResponse.json((orderData ?? []).map(o => mapOrder(o as Record<string, unknown>)));
     } catch {
       return NextResponse.json([]);
     }
@@ -240,10 +221,25 @@ export async function POST(req: Request) {
 
   const sb = getSupabaseAdmin();
 
+  // ── Manual (POS) discount — STAFF ONLY ────────────────────────
+  // A public/guest order can never discount itself (that would let a buyer
+  // zero out their total). We honour body.discount only when the caller holds
+  // a valid JWT and owns the store the sale is attributed to (or is an admin).
+  // The amount is re-clamped against the DB subtotal below.
+  let staffDiscount = 0;
+  const requestedDiscount = Math.round((Number(body.discount) || 0) * 100) / 100;
+  if (!isBulk && requestedDiscount > 0 && supplierId != null) {
+    const staff = await getAuthUser(req);
+    if (staff && (await ownsStoreOrAdmin(staff.id, supplierId))) {
+      staffDiscount = requestedDiscount;
+    }
+  }
+
   // ── Atomic path: place_order() RPC (schema v2) for real sales ──
   // Locks product rows, verifies + decrements stock, consumes the coupon,
-  // and inserts the order in ONE transaction.
-  if (!isBulk) {
+  // and inserts the order in ONE transaction. Skipped when a manual staff
+  // discount applies — the RPC can't take one, so we use the JS path below.
+  if (!isBulk && staffDiscount === 0) {
     try {
       const { data, error } = await sb.rpc('place_order', {
         p_customer_name:  customerName,
@@ -340,14 +336,26 @@ export async function POST(req: Request) {
       }
     }
 
+    // Add any staff (POS) discount on top of a coupon, clamped to the subtotal.
+    if (staffDiscount > 0) {
+      discount = Math.round(Math.min(discount + staffDiscount, subtotal) * 100) / 100;
+    }
+
     const total = Math.max(Math.round((subtotal - discount) * 100) / 100, 0);
+
+    // Snapshot the server-priced unit price onto each line item, so a later
+    // price change can never retroactively re-value this sale (the payout
+    // wallet reads this frozen price for legacy/unattributed orders).
+    const pricedItems = items.map(i => ({
+      id: i.id, qty: i.qty, price: Number(byId.get(i.id)?.price) || 0,
+    }));
 
     // 3. Insert the order FIRST — stock only moves after the order exists
     const basePayload: Record<string, unknown> = {
       id:             newOrderId(isBulk ? 'BULK' : 'ORD'),
       customer_name:  customerName,
       customer_phone: customerPhone,
-      items,
+      items:          pricedItems,
       subtotal,
       discount,
       total,
