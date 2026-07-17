@@ -33,7 +33,7 @@ export default function CartDrawer() {
       if (!g) {
         g = {
           shopId,
-          shopName: sup?.name ?? 'Mogarenta',
+          shopName: sup?.name ?? 'Hamar Mall',
           shopIcon: sup?.icon ?? '🏪',
           items: [], subtotal: 0,
         };

@@ -95,7 +95,7 @@ export default function AuthCallbackPage() {
       background:     'var(--bg)',
     }}>
       <div style={{ fontSize: '2.5rem' }}>🏪</div>
-      <div style={{ fontWeight: 800, fontSize: '1.3rem', color: 'var(--text)' }}>Mogarenta</div>
+      <div style={{ fontWeight: 800, fontSize: '1.3rem', color: 'var(--text)' }}>Hamar Mall</div>
       <div style={{ color: 'var(--text-muted)', fontSize: '.9rem' }}>{status}</div>
       <div className="spinner" style={{ width: 28, height: 28, marginTop: 8 }} />
     </div>

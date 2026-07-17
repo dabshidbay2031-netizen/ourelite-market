@@ -12,6 +12,7 @@ import { useRealtimePing } from '@/lib/useRealtimePing';
 import OnlinePaymentsWallet from '@/components/OnlinePaymentsWallet';
 import { CATEGORIES } from '@/lib/data';
 import { isRevenueOrder } from '@/lib/revenue';
+import { deriveSubscription, SUBSCRIPTION_TRIAL_DAYS } from '@/lib/subscription';
 import type { Order, Product } from '@/lib/types';
 
 /**
@@ -41,6 +42,7 @@ export default function BusinessDashboardView() {
   const { currentSupplier, loading: authLoading } = useAuth();
   const { state } = useApp();
   const supplierId = currentSupplier?.id ?? null;
+  const sub = useMemo(() => deriveSubscription(currentSupplier), [currentSupplier]);
 
   /* ── This business's own products + orders ── */
   const [claimedProducts, setClaimedProducts] = useState<Product[]>([]);
@@ -242,8 +244,17 @@ export default function BusinessDashboardView() {
       <div className="page-title-bar">
         <span className="page-title">📊 {currentSupplier?.name ?? 'My'} Dashboard</span>
         <span className="dash-live-pill">● Live</span>
+        <Link href="/billing" className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }}>💳 Billing</Link>
       </div>
       <p className="page-subtitle">Your store&apos;s sales performance &amp; analytics</p>
+
+      {/* Money-back window reminder — only while the seller can still refund. */}
+      {sub.refundable && (
+        <div className="card" style={{ margin: '0 16px 14px', padding: '11px 14px', borderRadius: 10, fontSize: '.85rem' }}>
+          ✅ Subscription active. You have <strong>{sub.daysLeftToRefund} day{sub.daysLeftToRefund === 1 ? '' : 's'}</strong> left
+          in your {SUBSCRIPTION_TRIAL_DAYS}-day money-back guarantee — <Link href="/billing">manage billing</Link>.
+        </div>
+      )}
 
       {/* ── Online Payments wallet (top, separate) ────── */}
       {supplierId != null && <OnlinePaymentsWallet supplierId={supplierId} />}

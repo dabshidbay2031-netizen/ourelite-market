@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useRouter } from '@/lib/hashRouter';
+import { useRouter, Link } from '@/lib/hashRouter';
 import dynamic from 'next/dynamic';
 import Header from '@/components/Header';
 import ProductImage from '@/components/ProductImage';
@@ -107,7 +107,7 @@ function ReferralCard({ userId }: { userId: string }) {
 
   const share = () => {
     if (navigator.share) {
-      navigator.share({ title: 'Mogarenta', text: `Shop with me on Mogarenta — use my code ${code} to get $5 off!`, url: link })
+      navigator.share({ title: 'Hamar Mall', text: `Shop with me on Hamar Mall — use my code ${code} to get $5 off!`, url: link })
         .catch(() => {});
     } else {
       navigator.clipboard.writeText(link);
@@ -821,7 +821,10 @@ export default function ProfilePage() {
         <Header showSearch={false} />
         <div className="page-title-bar">
           <span className="page-title">🏭 Supplier Dashboard</span>
-          <button className="btn btn-ghost btn-sm signout-btn" onClick={handleSignOut}>Sign Out</button>
+          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+            <Link href="/billing" className="btn btn-ghost btn-sm">💳 Billing</Link>
+            <button className="btn btn-ghost btn-sm signout-btn" onClick={handleSignOut}>Sign Out</button>
+          </div>
         </div>
         <SupplierDashboard supplier={currentSupplier} />
       </div>

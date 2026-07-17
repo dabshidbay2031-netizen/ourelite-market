@@ -5,6 +5,7 @@ import { Link } from '@/lib/hashRouter';
 import { useRouter } from '@/lib/hashRouter';
 import { getSupabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
+import { SUBSCRIPTION_PRICES, SUBSCRIPTION_TRIAL_DAYS } from '@/lib/subscription';
 
 type Method   = 'email' | 'google';
 type AcctType = 'user' | 'business' | 'supplier' | 'agent';
@@ -35,6 +36,14 @@ export default function SignupPage() {
 
   /* ── Google state ────────────────────────────── */
   const [googleStep, setGoogleStep] = useState<GoogleStep>('type');
+
+  /* ── Terms agreement (required to create any account) ── */
+  const [agreed, setAgreed] = useState(false);
+
+  /* Seller plans pay a subscription; customers & agents are free. */
+  const planFee = acctType === 'supplier' ? SUBSCRIPTION_PRICES.supplier
+                : acctType === 'business' ? SUBSCRIPTION_PRICES.business
+                : null;
 
   /* ── Helpers ─────────────────────────────────── */
   async function createRecord(uid: string, userName: string, userPhone = '') {
@@ -125,13 +134,30 @@ export default function SignupPage() {
 
   const acctIcon = acctType === 'business' ? '🏪' : acctType === 'supplier' ? '🏭' : acctType === 'agent' ? '📋' : '👤';
 
+  /* Fee disclosure + Terms checkbox, shared by the Email and Google flows. */
+  const agreeBlock = (
+    <>
+      {planFee != null && (
+        <div className="card" style={{ padding: '12px 14px', borderRadius: 10, margin: '4px 0 12px', fontSize: '.85rem', lineHeight: 1.5 }}>
+          💳 The {acctType === 'supplier' ? 'Supplier' : 'Business'} plan is <strong>${planFee.toFixed(2)}/month</strong>,
+          charged when you activate your store — with a <strong>{SUBSCRIPTION_TRIAL_DAYS}-day money-back guarantee</strong>.
+          You can create your account now and pay from the Billing page.
+        </div>
+      )}
+      <label style={{ display: 'flex', gap: 9, alignItems: 'flex-start', fontSize: '.85rem', margin: '2px 0 14px', cursor: 'pointer' }}>
+        <input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} style={{ marginTop: 3, flexShrink: 0 }} />
+        <span>I agree to the <Link href="/terms">Terms of Use</Link> and <Link href="/privacy">Privacy Policy</Link>.</span>
+      </label>
+    </>
+  );
+
   /* ── Method selector ─────────────────────────── */
   if (!method) {
     return (
       <div className="page-anim auth-wrap">
         <div className="auth-logo">
           <div className="auth-logo-icon">🏪</div>
-          <div className="auth-logo-title">Mogarenta</div>
+          <div className="auth-logo-title">Hamar Mall</div>
           <div className="auth-logo-sub">Create your account</div>
         </div>
 
@@ -185,7 +211,7 @@ export default function SignupPage() {
       <div className="page-anim auth-wrap">
         <div className="auth-logo">
           <div className="auth-logo-icon">{acctIcon}</div>
-          <div className="auth-logo-title">Mogarenta</div>
+          <div className="auth-logo-title">Hamar Mall</div>
           <div className="auth-logo-sub">Sign up with Email</div>
         </div>
 
@@ -289,8 +315,10 @@ export default function SignupPage() {
                   />
                 </div>
 
+                {agreeBlock}
+
                 <button className="btn btn-primary btn-full btn-lg" onClick={handleEmailSignup}
-                  disabled={loading || !name.trim() || !email.trim() || password.length < 6 || !password2}>
+                  disabled={loading || !name.trim() || !email.trim() || password.length < 6 || !password2 || !agreed}>
                   {loading ? <><span className="btn-spinner" /> Creating account…</> : 'Create Account →'}
                 </button>
               </div>
@@ -312,7 +340,7 @@ export default function SignupPage() {
     <div className="page-anim auth-wrap">
       <div className="auth-logo">
         <div className="auth-logo-icon">{acctIcon}</div>
-        <div className="auth-logo-title">Mogarenta</div>
+        <div className="auth-logo-title">Hamar Mall</div>
         <div className="auth-logo-sub">Sign up with Google</div>
       </div>
 
@@ -374,7 +402,9 @@ export default function SignupPage() {
             />
           </div>
 
-          <button className="auth-google-btn" onClick={handleGoogleSignup} disabled={loading || ((acctType === 'business' || acctType === 'supplier' || acctType === 'agent') && !name.trim())}>
+          {agreeBlock}
+
+          <button className="auth-google-btn" onClick={handleGoogleSignup} disabled={loading || !agreed || ((acctType === 'business' || acctType === 'supplier' || acctType === 'agent') && !name.trim())}>
             {loading ? (
               <><span className="btn-spinner" style={{ borderTopColor: '#4285F4' }} /> Redirecting…</>
             ) : (

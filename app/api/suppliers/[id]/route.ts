@@ -36,6 +36,14 @@ function mapSupplier(s: Record<string, unknown>) {
     approvalStatus:      (s.approval_status as string | undefined) ?? null,
     trialStartedAt:      (s.trial_started_at as string | undefined) ?? null,
     approvalRequestedAt: (s.approval_requested_at as string | undefined) ?? null,
+    /* Subscription billing — absent columns map to null. billingEnabled tells the
+       client the columns EXIST, so "not paid" can't be confused with
+       "migration_subscriptions.sql hasn't run" (which must never lock a seller). */
+    billingEnabled:         'subscription_paid_at' in s,
+    subscriptionPaidAt:     (s.subscription_paid_at as string | undefined) ?? null,
+    subscriptionRefundedAt: (s.subscription_refunded_at as string | undefined) ?? null,
+    subscriptionPlan:       (s.subscription_plan as string | undefined) ?? null,
+    subscriptionAmount:     s.subscription_amount != null ? Number(s.subscription_amount) : null,
   };
 }
 

@@ -51,7 +51,7 @@ export default function CheckoutPage() {
 
   const shopId = inferredShopId;
   const shop   = shopId != null ? suppliers.find(s => s.id === shopId) : null;
-  const shopName = shop?.name ?? 'Mogarenta';
+  const shopName = shop?.name ?? 'Hamar Mall';
   // Online-only stores have no shopfront → delivery is the only option.
   const onlineOnly = !!shop?.onlineOnly;
 

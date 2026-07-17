@@ -8,7 +8,7 @@ import { rateLimit, clientIp } from '@/lib/rateLimit';
  * Body: { messages: { role: 'user' | 'assistant', content: string }[] }
  * Returns: { reply }  (or { noKey } when GEMINI_API_KEY is missing)
  *
- * The public help assistant — answers how-to questions about using Mogarenta,
+ * The public help assistant — answers how-to questions about using Hamar Mall,
  * grounded in lib/ai/marketplaceKnowledge (public info only).
  */
 export async function POST(req: Request) {

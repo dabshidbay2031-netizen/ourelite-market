@@ -281,7 +281,8 @@ try {
     close.status === 200 && close.body.status === 'closed' && close.body.discrepancy === 0,
     JSON.stringify({ s: close.body?.status, d: close.body?.discrepancy }));
 
-  console.log('\n── 6. customers: legacy vs scoped ─────────');
+  console.log('\n── 6. customers: each store\'s book is PRIVATE ─');
+  // An unowned (legacy) customer must NOT be shared with every business.
   const legacyCust = await svc('customers', {
     method: 'POST', body: JSON.stringify({ name: 'Legacy Shared Test', phone: '000' }),
   });
@@ -301,10 +302,21 @@ try {
   });
   const custA = (await api(`/api/customers?supplierId=${supA.id}`, { headers: J(A.token) })).body;
   const custB = (await api(`/api/customers?supplierId=${supB.id}`, { headers: J(B.token) })).body;
-  check('legacy (null) customer visible to A', custA.some(c => String(c.id) === String(legacyCustId)));
-  check('legacy (null) customer visible to B', custB.some(c => String(c.id) === String(legacyCustId)));
-  check("A's scoped customer visible to A", custA.some(c => String(c.id) === String(scopedCustId)));
-  check("A's scoped customer HIDDEN from B", !custB.some(c => String(c.id) === String(scopedCustId)));
+  check('unowned customer NOT leaked to A', !custA.some(c => String(c.id) === String(legacyCustId)));
+  check('unowned customer NOT leaked to B', !custB.some(c => String(c.id) === String(legacyCustId)));
+  check("A's own customer visible to A", custA.some(c => String(c.id) === String(scopedCustId)));
+  check("A's customer HIDDEN from B", !custB.some(c => String(c.id) === String(scopedCustId)));
+  // B must not be able to read, edit, or delete A's customer by id.
+  check("B cannot edit A's customer → 403", (await api(`/api/customers/${scopedCustId}`, {
+    method: 'PATCH', headers: J(B.token), body: JSON.stringify({ name: 'stolen' }),
+  })).status === 403);
+  check("B cannot delete A's customer → 403", (await api(`/api/customers/${scopedCustId}`, {
+    method: 'DELETE', headers: J(B.token),
+  })).status === 403);
+  check("B cannot plant a customer in A's book → 403", (await api('/api/customers', {
+    method: 'POST', headers: J(B.token),
+    body: JSON.stringify({ name: 'Mole', supplierId: supA.id }),
+  })).status === 403);
 
   console.log('\n── 7. invoices: validation + filter ───────');
   check('empty items → 400', (await api('/api/invoices', {

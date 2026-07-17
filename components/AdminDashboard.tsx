@@ -414,7 +414,7 @@ export default function AdminDashboard() {
         <div style={{ display:'flex', alignItems:'center', gap:10 }}>
           <span style={{ fontSize:22 }}>⚙️</span>
           <div>
-            <div style={{ fontWeight:800, fontSize:'1rem' }}>Mogarenta Admin</div>
+            <div style={{ fontWeight:800, fontSize:'1rem' }}>Hamar Mall Admin</div>
             <div style={{ fontSize:'.72rem', color:'var(--text-muted)' }}>
               {isAdmin ? '👑 Full Admin' : '👁️ View Only'} — {user.displayName || user.id.slice(0,8)}
             </div>

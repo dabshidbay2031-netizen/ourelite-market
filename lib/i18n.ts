@@ -78,7 +78,7 @@ export const translations: Record<LangCode, Record<string, string>> = {
     your_code:    'Your referral code',
     refer_desc:   'Share your code — both of you get $5 credit when they sign up',
     // Misc
-    powered_by:   'Powered by Mogarenta',
+    powered_by:   'Powered by Hamar Mall',
     all_products: 'All Products',
     best_sellers: 'Best Sellers',
     similar:      'Similar Products',
@@ -162,7 +162,7 @@ export const translations: Record<LangCode, Record<string, string>> = {
     your_code:    'Koodhaaga tilmaamaha',
     refer_desc:   'La wadaag koodhaaga — labadiin waxaad heshaan $5 aad isku adeegsateen',
     // Misc
-    powered_by:   'Waxay shaqaysaa Mogarenta',
+    powered_by:   'Waxay shaqaysaa Hamar Mall',
     all_products: 'Dhammaan Alaabta',
     best_sellers: 'Ugu Badan Iibka',
     similar:      'Alaab La Mid Ah',
@@ -246,7 +246,7 @@ export const translations: Record<LangCode, Record<string, string>> = {
     your_code:    'كود الإحالة الخاص بك',
     refer_desc:   'شارك كودك — كلاكما يحصل على $5 عند التسجيل',
     // Misc
-    powered_by:   'مدعوم من Mogarenta',
+    powered_by:   'مدعوم من Hamar Mall',
     all_products: 'جميع المنتجات',
     best_sellers: 'الأكثر مبيعاً',
     similar:      'منتجات مشابهة',

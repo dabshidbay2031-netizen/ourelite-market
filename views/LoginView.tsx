@@ -60,7 +60,7 @@ export default function LoginPage() {
     <div className="page-anim auth-wrap">
       <div className="auth-logo">
         <div className="auth-logo-icon">🏪</div>
-        <div className="auth-logo-title">Mogarenta</div>
+        <div className="auth-logo-title">Hamar Mall</div>
         <div className="auth-logo-sub">Business Portal</div>
       </div>
 

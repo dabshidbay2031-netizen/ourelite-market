@@ -38,7 +38,7 @@ import PushManager       from '@/components/PushManager';
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
-  title: 'Mogarenta Shop',
+  title: 'Hamar Mall',
   description: 'E-commerce & Point of Sale',
   manifest: '/manifest.json',
 };

@@ -157,7 +157,7 @@ export default function Receipt({
                     <div style={{ fontSize:28 }}>{businessIcon}</div>
                   )
                 )}
-                <div style={{ fontSize:16, fontWeight:700, marginTop:4 }}>{businessName || 'Mogarenta'}</div>
+                <div style={{ fontSize:16, fontWeight:700, marginTop:4 }}>{businessName || 'Hamar Mall'}</div>
                 <div style={{ fontSize:11, letterSpacing:2, textTransform:'uppercase', color:'#555', marginTop:2 }}>Receipt</div>
                 <div style={{ fontSize:11, marginTop:8, color:'#555' }}>
                   {dateStr} · {timeStr}
@@ -225,7 +225,7 @@ export default function Receipt({
                   {pmLabel}
                 </div>
                 <div>Thank you for your purchase!</div>
-                <div style={{ marginTop:4, opacity:0.6 }}>Powered by Mogarenta</div>
+                <div style={{ marginTop:4, opacity:0.6 }}>Powered by Hamar Mall</div>
               </div>
             </div>
           </div>

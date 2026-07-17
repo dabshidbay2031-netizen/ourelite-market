@@ -38,7 +38,7 @@ function Splash() {
       justifyContent: 'center', minHeight: '100dvh', gap: 14,
     }}>
       <div style={{ fontSize: '2.5rem' }}>🏪</div>
-      <div style={{ fontWeight: 800, fontSize: '1.3rem' }}>Mogarenta</div>
+      <div style={{ fontWeight: 800, fontSize: '1.3rem' }}>Hamar Mall</div>
       <div className="spinner" style={{ width: 26, height: 26 }} />
     </div>
   );

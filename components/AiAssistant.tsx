@@ -7,12 +7,12 @@ interface Msg { role: 'user' | 'assistant'; content: string }
 
 const GREETING: Msg = {
   role: 'assistant',
-  content: 'Salaan! 👋 Waxaan ahay Mogarenta Assistant. Weydii wax kasta oo ku saabsan sida loo isticmaalo suuqa — iibsi, iib, lacag-bixin (Sifalo Pay), dalabyo, iwm.\n\nHi! I\'m the Mogarenta Assistant — ask me anything about using the marketplace.',
+  content: 'Salaan! 👋 Waxaan ahay Hamar Mall Assistant. Weydii wax kasta oo ku saabsan sida loo isticmaalo suuqa — iibsi, iib, lacag-bixin (Sifalo Pay), dalabyo, iwm.\n\nHi! I\'m the Hamar Mall Assistant — ask me anything about using the marketplace.',
 };
 
 /**
  * Floating public help assistant (Gemini-powered). Available app-wide; answers
- * how-to questions about using Mogarenta. Mounted once in the root layout.
+ * how-to questions about using Hamar Mall. Mounted once in the root layout.
  */
 export default function AiAssistant() {
   const [open, setOpen]       = useState(false);
@@ -61,16 +61,16 @@ export default function AiAssistant() {
     <>
       <button
         className="ai-fab"
-        aria-label={open ? 'Close assistant' : 'Open Mogarenta assistant'}
+        aria-label={open ? 'Close assistant' : 'Open Hamar Mall assistant'}
         onClick={() => setOpen(o => !o)}
       >
         {open ? '✕' : '🤖'}
       </button>
 
       {open && (
-        <div className="ai-panel" role="dialog" aria-label="Mogarenta Assistant">
+        <div className="ai-panel" role="dialog" aria-label="Hamar Mall Assistant">
           <div className="ai-panel-head">
-            <span className="ai-panel-title">🤖 Mogarenta Assistant</span>
+            <span className="ai-panel-title">🤖 Hamar Mall Assistant</span>
             <button className="ai-panel-close" aria-label="Close" onClick={() => setOpen(false)}>✕</button>
           </div>
 

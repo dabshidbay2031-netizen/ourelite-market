@@ -5,14 +5,28 @@ import { useEffect, useRef, useState } from 'react';
 interface Props {
   onDetected: (code: string) => void;
   onClose:    () => void;
+  /** Header text — e.g. "Scan Barcode" (default) or "Scan product barcode". */
+  title?: string;
+  /**
+   * Accept ANY symbology (Code-128/39, QR, alphanumeric).
+   * Default false = numeric retail barcodes only (EAN-13/8, UPC-A/E),
+   * which is what product lookup wants.
+   */
+  allowAnyFormat?: boolean;
 }
 
 /**
- * Modal barcode scanner.
- * Uses html5-qrcode for camera-based EAN-13 / UPC-A / EAN-8 scanning.
- * Falls back to manual entry if camera is unavailable.
+ * Modal barcode scanner — the SINGLE scanner for the whole app.
+ *
+ * The camera preview is always visible: html5-qrcode renders a live <video>
+ * into #barcode-reader, with an aim box drawn over it. It works on every
+ * browser (iOS Safari and Firefox included), unlike the native BarcodeDetector
+ * API, which only exists in Chromium — InventoryView used to call that
+ * directly and showed NO preview at all.
+ *
+ * Manual entry is always offered as a fallback.
  */
-export default function BarcodeScanner({ onDetected, onClose }: Props) {
+export default function BarcodeScanner({ onDetected, onClose, title = 'Scan Barcode', allowAnyFormat = false }: Props) {
   const [status,      setStatus]      = useState<'loading' | 'scanning' | 'error'>('loading');
   const [errorMsg,    setErrorMsg]    = useState('');
   const [manualCode,  setManualCode]  = useState('');
@@ -33,13 +47,21 @@ export default function BarcodeScanner({ onDetected, onClose }: Props) {
           { facingMode: 'environment' },
           {
             fps: 12,
-            qrbox: { width: 260, height: 130 },
+            // Responsive aim box — keeps the live preview large on phones
+            // instead of a fixed 260px window on a cropped video.
+            qrbox: (viewW: number, viewH: number) => {
+              const w = Math.max(140, Math.floor(Math.min(viewW, 380) * 0.82));
+              const h = Math.max(90,  Math.floor(Math.min(viewH * 0.6, w * 0.55)));
+              return { width: w, height: h };
+            },
           },
           (decodedText: string) => {
             if (detectedRef.current || !mounted) return;
-            const cleaned = decodedText.replace(/\s/g, '');
-            // Accept numeric barcodes of standard lengths
-            if (/^\d{8,14}$/.test(cleaned)) {
+            const cleaned = decodedText.trim().replace(/\s/g, '');
+            const ok = allowAnyFormat
+              ? cleaned.length >= 4
+              : /^\d{8,14}$/.test(cleaned);   // EAN-13/8, UPC-A/E
+            if (ok) {
               detectedRef.current = true;
               setLastScanned(cleaned);
               scanner.stop().catch(() => {});
@@ -47,14 +69,19 @@ export default function BarcodeScanner({ onDetected, onClose }: Props) {
               onClose();
             }
           },
-          () => {} // per-frame errors are normal, ignore them
+          () => {} // per-frame decode misses are normal, ignore them
         );
 
         if (mounted) setStatus('scanning');
-      } catch {
+      } catch (e) {
         if (mounted) {
           setStatus('error');
-          setErrorMsg('Camera not available. Please enter the barcode manually below.');
+          const name = (e as { name?: string })?.name ?? '';
+          setErrorMsg(
+            name === 'NotAllowedError'
+              ? 'Camera permission was denied. Allow camera access, or enter the barcode manually below.'
+              : 'Camera not available. Please enter the barcode manually below.'
+          );
         }
       }
     }
@@ -71,31 +98,33 @@ export default function BarcodeScanner({ onDetected, onClose }: Props) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleManual() {
-    const code = manualCode.trim().replace(/\D/g, '');
-    if (code.length < 8) return;
+    const raw = manualCode.trim();
+    const code = allowAnyFormat ? raw : raw.replace(/\D/g, '');
+    if (allowAnyFormat ? code.length < 4 : code.length < 8) return;
     onDetected(code);
     onClose();
   }
 
+  const manualTooShort = allowAnyFormat
+    ? manualCode.trim().length < 4
+    : manualCode.replace(/\D/g, '').length < 8;
+
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div
-        className="modal-box barcode-modal-box"
-        onClick={e => e.stopPropagation()}
-      >
+    <div className="modal-overlay barcode-modal-overlay" onClick={onClose}>
+      <div className="modal-box barcode-modal-box" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: '1.2rem' }}>📷</span>
-            <span style={{ fontWeight: 700 }}>Scan Barcode</span>
+            <span style={{ fontWeight: 700 }}>{title}</span>
           </div>
           <button className="modal-close" onClick={onClose}>✕</button>
         </div>
 
         <div className="modal-body">
-          {/* Camera viewport */}
+          {/* Live camera viewport — always on screen while scanning */}
           <div className="barcode-viewport">
-            <div id="barcode-reader" style={{ width: '100%' }} />
+            <div id="barcode-reader" />
 
             {status === 'loading' && (
               <div className="barcode-overlay">
@@ -104,21 +133,26 @@ export default function BarcodeScanner({ onDetected, onClose }: Props) {
               </div>
             )}
 
-            {status === 'scanning' && (
-              <div className="barcode-scan-line" />
+            {status === 'error' && (
+              <div className="barcode-overlay">
+                <span style={{ fontSize: '1.8rem' }}>📷</span>
+                <span style={{ fontSize: '.82rem', textAlign: 'center', padding: '0 18px', opacity: .85 }}>
+                  Camera unavailable
+                </span>
+              </div>
             )}
+
+            {status === 'scanning' && <div className="barcode-scan-line" />}
           </div>
 
           {status === 'scanning' && (
             <p className="barcode-hint">
-              📦 Point at a barcode (EAN-13, UPC-A, EAN-8, Code 128)
+              📦 Point the camera at a barcode{allowAnyFormat ? '' : ' (EAN-13, UPC-A, EAN-8)'}
             </p>
           )}
 
           {status === 'error' && (
-            <div className="auth-error" style={{ marginBottom: 12 }}>
-              {errorMsg}
-            </div>
+            <div className="auth-error" style={{ marginBottom: 12 }}>{errorMsg}</div>
           )}
 
           {lastScanned && (
@@ -127,30 +161,26 @@ export default function BarcodeScanner({ onDetected, onClose }: Props) {
             </div>
           )}
 
-          {/* Divider */}
-          <div className="barcode-divider">
-            <span>or enter manually</span>
-          </div>
+          <div className="barcode-divider"><span>or enter manually</span></div>
 
-          {/* Manual entry */}
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
             <input
               className="form-input"
-              placeholder="Enter barcode number…"
+              placeholder={allowAnyFormat ? 'Enter barcode…' : 'Enter barcode number…'}
               value={manualCode}
-              onChange={e => setManualCode(e.target.value.replace(/\D/g, ''))}
+              onChange={e => setManualCode(allowAnyFormat ? e.target.value : e.target.value.replace(/\D/g, ''))}
               onKeyDown={e => e.key === 'Enter' && handleManual()}
-              inputMode="numeric"
-              maxLength={14}
+              inputMode={allowAnyFormat ? 'text' : 'numeric'}
+              maxLength={32}
               autoFocus={status === 'error'}
             />
             <button
               className="btn btn-primary"
               onClick={handleManual}
-              disabled={manualCode.replace(/\D/g, '').length < 8}
+              disabled={manualTooShort}
               style={{ flexShrink: 0 }}
             >
-              Search
+              {allowAnyFormat ? 'Use' : 'Search'}
             </button>
           </div>
 

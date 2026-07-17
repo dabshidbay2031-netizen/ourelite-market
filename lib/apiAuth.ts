@@ -138,6 +138,36 @@ export async function requireProductOwner(req: Request, productId: number): Prom
   return null;
 }
 
+/** The store this user owns (suppliers.auth_user_id), or null. */
+export async function ownedStoreId(userId: string): Promise<number | null> {
+  const { data } = await getSupabaseAdmin()
+    .from('suppliers').select('id').eq('auth_user_id', userId).maybeSingle();
+  return (data?.id as number | undefined) ?? null;
+}
+
+/**
+ * Gate: the caller must be an admin OR the business that owns this customer
+ * (customers.supplier_id). requireStaff alone let ANY store edit or delete
+ * ANOTHER store's customer record — this closes that.
+ *
+ * A customer with no owner (supplier_id null — legacy row) belongs to no
+ * store, so only an admin may touch it. It must never be handed to whoever
+ * asks first: that is how one store's customer book leaks into another's.
+ */
+export async function requireCustomerOwner(req: Request, customerId: string): Promise<Response | null> {
+  const user = await getAuthUser(req);
+  if (!user) return NextResponse.json({ error: 'Unauthorized — sign in required' }, { status: 401 });
+  const { data: row } = await getSupabaseAdmin()
+    .from('customers').select('supplier_id').eq('id', customerId).maybeSingle();
+  if (!row) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const ownerId = row.supplier_id as number | null;
+  const ok = ownerId != null
+    ? await ownsStoreOrAdmin(user.id, ownerId)
+    : await isAdminUser(user.id);
+  if (!ok) return NextResponse.json({ error: 'Forbidden — not your customer' }, { status: 403 });
+  return null;
+}
+
 /**
  * Gate: the caller must be an admin OR the business that made this claim
  * (business_products.id = rowId → business_products.supplier_id).

@@ -9,7 +9,11 @@ import { useMyProductIds } from '@/lib/useMyProductIds';
 import type { Customer } from '@/lib/types';
 
 /* ─── constants ──────────────────────────────────── */
-const LOCAL_KEY = 'mogarenta_customers';
+/* Offline cache key — MUST be per-store. A single shared key let one store's
+   customer book stay in the browser and surface for the next account signed in
+   on the same device. */
+const localKeyFor = (supplierId: number | null) =>
+  supplierId != null ? `mogarenta_customers_${supplierId}` : null;
 const AVATAR_COLORS = ['#4F46E5','#7C3AED','#DB2777','#EA580C','#16A34A','#0891B2','#D97706','#6366F1'];
 
 function initials(name: string) {
@@ -93,23 +97,26 @@ export default function CustomersPage() {
   const [payMethod,  setPayMethod]  = useState('cash');
   const [savingPay,  setSavingPay]  = useState(false);
 
-  /* ── Load customers: API first, localStorage fallback ─────── */
+  /* ── Load this store's customers: API first, localStorage fallback ─────── */
   useEffect(() => {
     (async () => {
+      // No store → no customer book. Never fall back to the unscoped
+      // /api/customers, which is the whole platform's book (admin only).
+      if (supplierId == null) { setCustomers([]); setLoading(false); return; }
+      const key = localKeyFor(supplierId)!;
       try {
-        const url = supplierId != null ? `/api/customers?supplierId=${supplierId}` : '/api/customers';
-        const res  = await fetch(url, { headers: await authHeaders() });
+        const res  = await fetch(`/api/customers?supplierId=${supplierId}`, { headers: await authHeaders() });
         const data = await res.json();
         if (Array.isArray(data)) {
           setCustomers(data);
-          localStorage.setItem(LOCAL_KEY, JSON.stringify(data));
+          localStorage.setItem(key, JSON.stringify(data));
           setLoading(false);
           return;
         }
       } catch {}
-      /* fallback to localStorage */
+      /* fallback to this store's own cache */
       try {
-        const raw = localStorage.getItem(LOCAL_KEY);
+        const raw = localStorage.getItem(key);
         if (raw) setCustomers(JSON.parse(raw));
       } catch {}
       setLoading(false);
@@ -144,8 +151,9 @@ export default function CustomersPage() {
   /* ── Persist helper ──────────────────────────────── */
   const persist = useCallback((updated: Customer[]) => {
     setCustomers(updated);
-    localStorage.setItem(LOCAL_KEY, JSON.stringify(updated));
-  }, []);
+    const key = localKeyFor(supplierId);
+    if (key) localStorage.setItem(key, JSON.stringify(updated));
+  }, [supplierId]);
 
   /* ── CRUD ────────────────────────────────────────── */
   function openAdd() { setEditingId(null); setForm(emptyForm); setShowForm(true); }
@@ -353,7 +361,7 @@ export default function CustomersPage() {
   function handlePrint() {
     if (!invoiceCust || invItems.length === 0) { toast('Add at least one product', 'error'); return; }
 
-    const storeName = currentSupplier?.name ?? 'Mogarenta Store';
+    const storeName = currentSupplier?.name ?? 'Hamar Mall Store';
 
     const invNum = `INV-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
     const date   = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });

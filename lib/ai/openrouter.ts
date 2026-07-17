@@ -52,7 +52,7 @@ export async function openrouterGenerate(opts: GenOpts): Promise<ORResult> {
         'Authorization': `Bearer ${key}`,
         'Content-Type':  'application/json',
         // Optional attribution (shows in OpenRouter dashboards).
-        'X-Title':       'Mogarenta',
+        'X-Title':       'Hamar Mall',
       },
       body: JSON.stringify({
         model:       opts.model || OPENROUTER_MODEL,

@@ -33,6 +33,7 @@ export const ROUTES: RouteDef[] = [
   { pattern: '/pos',           component: lazy(() => import('@/views/PosView')) },
   { pattern: '/settings',      component: lazy(() => import('@/views/SettingsView')) },
   { pattern: '/profile',       component: lazy(() => import('@/views/ProfileView')) },
+  { pattern: '/billing',       component: lazy(() => import('@/views/BillingView')) },
   { pattern: '/checkout',         component: lazy(() => import('@/views/CheckoutView')) },
   { pattern: '/checkout/:shopId', component: lazy(() => import('@/views/CheckoutView')) },
   { pattern: '/payment/sifalo/return', component: lazy(() => import('@/views/SifaloReturnView')) },

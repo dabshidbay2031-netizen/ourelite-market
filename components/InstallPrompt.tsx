@@ -47,7 +47,7 @@ export default function InstallPrompt() {
     <div className="install-prompt">
       <div className="install-prompt-icon">📱</div>
       <div className="install-prompt-content">
-        <div className="install-prompt-title">Install Mogarenta</div>
+        <div className="install-prompt-title">Install Hamar Mall</div>
         <div className="install-prompt-sub">Add to your home screen for quick access</div>
       </div>
       <button className="install-prompt-btn" onClick={handleInstall}>Install</button>

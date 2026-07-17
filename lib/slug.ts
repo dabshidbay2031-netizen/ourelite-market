@@ -22,7 +22,10 @@ export const RESERVED_SLUGS = new Set([
   'privacy', 'terms', 'payment', 'payments', 'legal', 'help', 'support',
   'about', 'contact', 'login', 'signup', 'signin', 'register', 'logout',
   'www', 'app', 'mail', 'blog', 'news', 'store', 'shop', 'stores',
-  'mogarenta', 'official', 'null', 'undefined',
+  // Brand names — a store must never be able to impersonate the marketplace.
+  // 'mogarenta' stays reserved after the rename so the old name can't be claimed.
+  'mogarenta', 'hamarmall', 'hamar-mall', 'hamar',
+  'official', 'null', 'undefined',
 ]);
 
 /** Turn a store name into a URL-safe slug: "City Care Pharmacy!" → "city-care-pharmacy". */

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import Header from '@/components/Header';
 import ProductImage from '@/components/ProductImage';
@@ -11,6 +11,7 @@ import { authHeaders } from '@/lib/clientAuth';
 import { CATEGORIES } from '@/lib/data';
 
 const ProductImageUpload = dynamic(() => import('@/components/ProductImageUpload'), { ssr: false });
+const BarcodeScanner     = dynamic(() => import('@/components/BarcodeScanner'),     { ssr: false });
 
 type StockFilter = 'all' | 'low' | 'out';
 
@@ -66,13 +67,13 @@ export default function InventoryPage() {
   const [confirmDelete, setConfirmDelete] = useState<{ id: number; name: string; isClaim: boolean } | null>(null);
 
   // ── Barcode scanner state ─────────────────────────────────
+  // Both scan buttons open the shared <BarcodeScanner> modal, which always
+  // shows a live camera preview. `scanTarget` says what to do with the code:
+  //   'lookup' — top bar: find/edit the product with that barcode
+  //   'form'   — product form: fill in the Barcode field
   const [barcodeInput, setBarcodeInput] = useState('');
   const [lookingUp, setLookingUp]       = useState(false);
-  const [scanning, setScanning]         = useState(false);
-  const scanningRef = useRef(false);
-  const videoRef    = useRef<HTMLVideoElement>(null);
-  const streamRef   = useRef<MediaStream | null>(null);
-  const rafRef      = useRef<number>(0);
+  const [scanTarget, setScanTarget]     = useState<'lookup' | 'form' | null>(null);
 
   const pf = (k: keyof ProductForm, v: string) => setForm(f => ({ ...f, [k]: v }));
 
@@ -162,63 +163,10 @@ export default function InventoryPage() {
     setBarcodeInput('');
   }, [inventory, toast, claimed]);
 
-  // ── Camera scan ───────────────────────────────────────────
-  const stopScan = useCallback(() => {
-    scanningRef.current = false;
-    setScanning(false);
-    cancelAnimationFrame(rafRef.current);
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
-  }, []);
-
-  const startCameraScan = useCallback(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (!('BarcodeDetector' in window)) {
-      toast('Camera barcode detection not supported in this browser. Enter the barcode manually.', 'error');
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
-      });
-      streamRef.current = stream;
-      scanningRef.current = true;
-      setScanning(true);
-
-      // Give React time to render the <video> element
-      requestAnimationFrame(async () => {
-        if (!videoRef.current) { stopScan(); return; }
-        videoRef.current.srcObject = stream;
-        try { await videoRef.current.play(); } catch { stopScan(); return; }
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const detector = new (window as any).BarcodeDetector({
-          formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','code_93','qr_code','data_matrix'],
-        });
-
-        const scanFrame = async () => {
-          if (!scanningRef.current || !videoRef.current) return;
-          try {
-            const barcodes = await detector.detect(videoRef.current);
-            if (barcodes.length > 0) {
-              const code = barcodes[0].rawValue as string;
-              stopScan();
-              await handleBarcodeLookup(code);
-              return;
-            }
-          } catch { /* keep scanning */ }
-          rafRef.current = requestAnimationFrame(scanFrame);
-        };
-        rafRef.current = requestAnimationFrame(scanFrame);
-      });
-    } catch (err: unknown) {
-      const name = err instanceof Error ? err.name : '';
-      toast(name === 'NotAllowedError' ? 'Camera permission denied' : 'Could not access camera', 'error');
-    }
-  }, [handleBarcodeLookup, stopScan, toast]);
-
-  // Clean up camera on unmount
-  useEffect(() => () => stopScan(), [stopScan]);
+  // Camera scanning lives entirely in <BarcodeScanner> (html5-qrcode), which
+  // renders a visible preview and works on every browser. This view used to
+  // call the native BarcodeDetector API directly — Chromium-only, so it simply
+  // refused to scan on iOS Safari and Firefox.
 
   // ── Save ──────────────────────────────────────────────────
   const handleSave = async () => {
@@ -442,55 +390,27 @@ export default function InventoryPage() {
               value={barcodeInput}
               onChange={e => setBarcodeInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleBarcodeLookup(barcodeInput)}
-              disabled={lookingUp || scanning}
+              disabled={lookingUp}
             />
           </div>
           <button
             className="btn btn-secondary btn-sm"
             onClick={() => handleBarcodeLookup(barcodeInput)}
-            disabled={!barcodeInput.trim() || lookingUp || scanning}
+            disabled={!barcodeInput.trim() || lookingUp}
             style={{ whiteSpace: 'nowrap' }}
           >
             {lookingUp ? 'Looking…' : '🔍 Find'}
           </button>
           <button
-            className={`btn btn-sm ${scanning ? 'btn-danger' : 'btn-secondary'}`}
-            onClick={scanning ? stopScan : startCameraScan}
+            className="btn btn-sm btn-secondary"
+            onClick={() => setScanTarget('lookup')}
+            disabled={lookingUp}
             style={{ whiteSpace: 'nowrap' }}
-            title={scanning ? 'Stop camera' : 'Scan with camera'}
+            title="Scan with camera"
           >
-            {scanning ? '✕ Stop' : '📷 Scan'}
+            📷 Scan
           </button>
         </div>
-
-        {scanning && (
-          <div style={{
-            marginTop: 10, borderRadius: 12, overflow: 'hidden', position: 'relative',
-            background: '#000', maxHeight: 240,
-          }}>
-            <video
-              ref={videoRef}
-              playsInline
-              muted
-              style={{ width: '100%', display: 'block', maxHeight: 240, objectFit: 'cover' }}
-            />
-            {/* aim guide */}
-            <div style={{
-              position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none',
-            }}>
-              <div style={{
-                width: 220, height: 80, border: '2px solid rgba(255,255,255,.8)',
-                borderRadius: 8, boxShadow: '0 0 0 9999px rgba(0,0,0,.35)',
-              }} />
-            </div>
-            <div style={{
-              position: 'absolute', bottom: 8, left: 0, right: 0, textAlign: 'center',
-              color: '#fff', fontSize: 12, textShadow: '0 1px 3px #000',
-            }}>
-              Point camera at barcode
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Stats */}
@@ -723,31 +643,7 @@ export default function InventoryPage() {
                         type="button"
                         className="btn btn-secondary btn-sm"
                         title="Scan with camera"
-                        onClick={async () => {
-                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                          if (!('BarcodeDetector' in window)) {
-                            toast('Camera scan not supported. Enter barcode manually.', 'error'); return;
-                          }
-                          try {
-                            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                            const detector = new (window as any).BarcodeDetector({ formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code'] });
-                            const tmpVideo = document.createElement('video');
-                            tmpVideo.srcObject = stream; tmpVideo.playsInline = true; tmpVideo.muted = true;
-                            await tmpVideo.play();
-                            let found = false;
-                            for (let i = 0; i < 60 && !found; i++) {
-                              await new Promise(r => setTimeout(r, 200));
-                              const barcodes = await detector.detect(tmpVideo);
-                              if (barcodes.length > 0) {
-                                pf('barcode', barcodes[0].rawValue);
-                                found = true;
-                              }
-                            }
-                            stream.getTracks().forEach(t => t.stop());
-                            if (!found) toast('No barcode detected. Try again.', 'error');
-                          } catch { toast('Camera not available', 'error'); }
-                        }}
+                        onClick={() => setScanTarget('form')}
                         style={{ flexShrink: 0 }}
                       >
                         📷
@@ -831,6 +727,22 @@ export default function InventoryPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Camera scanner — shared by the top lookup bar and the product form.
+          Opens above the product form modal (see .barcode-modal-overlay). */}
+      {scanTarget && (
+        <BarcodeScanner
+          title={scanTarget === 'form' ? 'Scan product barcode' : 'Scan to find product'}
+          // The form's Barcode field accepts any symbology (Code-128 etc.);
+          // lookup matches catalog EAN/UPC numbers.
+          allowAnyFormat={scanTarget === 'form'}
+          onDetected={code => {
+            if (scanTarget === 'form') pf('barcode', code);
+            else handleBarcodeLookup(code);
+          }}
+          onClose={() => setScanTarget(null)}
+        />
       )}
     </div>
   );

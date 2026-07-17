@@ -1,4 +1,4 @@
-/* Mogarenta service worker — Web Push only.
+/* Hamar Mall service worker — Web Push only.
  *
  * Deliberately NOT a caching/offline worker: the app already has its own
  * localStorage stale-while-revalidate layer (AppContext), and a fetch-
@@ -19,7 +19,7 @@ self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { /* non-JSON push */ }
 
-  const title = data.title || 'Mogarenta';
+  const title = data.title || 'Hamar Mall';
   const options = {
     body:  data.body || '',
     icon:  data.icon || '/icons/icon-192.png',

@@ -79,11 +79,17 @@ export interface Supplier {
   longitude?:     number | null;
   hideStock?:     boolean;  // hide stock count from public customers
   onlineOnly?:    boolean;  // internet-only store — no physical shopfront, no pickup
-  accountType?:   'business' | 'supplier';
+  accountType?:   'business' | 'supplier' | 'agent';
   /* Trial + approval lifecycle (absent on pre-migration schemas = approved) */
   approvalStatus?:      'trial' | 'pending' | 'approved' | 'rejected' | null;
   trialStartedAt?:      string | null;
   approvalRequestedAt?: string | null;
+  /* Subscription billing (absent on pre-migration schemas) */
+  billingEnabled?:         boolean;   // false = billing columns not deployed yet
+  subscriptionPaidAt?:     string | null;
+  subscriptionRefundedAt?: string | null;
+  subscriptionPlan?:       string | null;
+  subscriptionAmount?:     number | null;
 }
 
 export interface CartItem {
