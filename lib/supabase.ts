@@ -23,7 +23,10 @@ let _cachedUrl = '';
  * get a much larger budget. Applying the 8s cap to uploads is what caused
  * chat image sends to fail with "signal timed out".
  */
-const SUPABASE_TIMEOUT_MS = 8000;
+// 8s was too tight for a mobile 3G token-refresh / query round-trip in the
+// target market — legitimate-but-slow requests aborted with "signal timed out".
+// 15s gives slow connections room while still failing fast enough to recover.
+const SUPABASE_TIMEOUT_MS = 15000;
 const STORAGE_TIMEOUT_MS   = 120000;
 
 function reqUrl(input: RequestInfo | URL): string {
