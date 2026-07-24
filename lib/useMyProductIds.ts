@@ -47,6 +47,10 @@ export function useMyProductIds(): {
    *  different things for each (adjust the claim vs. edit/delete the shared
    *  catalog row), so callers must branch on this. */
   claimed: Map<number, ClaimRecord>;
+  /** Source ids this store has COPIED (products.copied_from_product_id). Lets
+   *  the catalog show "In your store" on the ORIGINAL row a store copied from,
+   *  whose own id is naturally absent from `ids`. */
+  copiedSources: Set<number>;
   /** Re-fetch the claim records (call after PATCHing/DELETEing a claim so the
    *  in-memory map isn't stale until the next full mount). */
   refresh: () => void;
@@ -100,5 +104,18 @@ export function useMyProductIds(): {
     return s;
   }, [claimed, state.products, supplierId]);
 
-  return { ids, scoped: supplierId != null, ready, supplierId, claimed, refresh };
+  // Which catalog rows this store already copied. A copy is its own product, so
+  // the SOURCE id never lands in `ids` — without this the original would still
+  // offer "Add to Store" after the store had already copied it.
+  const copiedSources = useMemo(() => {
+    const s = new Set<number>();
+    if (supplierId != null) {
+      for (const p of state.products) {
+        if (p.supplierId === supplierId && p.copiedFromProductId != null) s.add(p.copiedFromProductId);
+      }
+    }
+    return s;
+  }, [state.products, supplierId]);
+
+  return { ids, copiedSources, scoped: supplierId != null, ready, supplierId, claimed, refresh };
 }

@@ -41,6 +41,10 @@ export interface Product {
   isB2b?:        boolean;       // only visible to business/supplier accounts
   moq?:          number;        // minimum order quantity
   taxMode?:      'none' | 'included' | 'excluded'; // VAT handling (5%)
+  /** Set when this listing was COPIED from another store's catalog row (the
+   *  "Add to my store" flow) — this row is owned outright by the copying store.
+   *  Null for an original. Ships in migration_v4_0.sql. */
+  copiedFromProductId?: number | null;
 }
 
 /** A product that a specific business has claimed from the global catalog */

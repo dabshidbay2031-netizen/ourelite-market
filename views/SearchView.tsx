@@ -57,23 +57,30 @@ function ClaimModal({ product, supplierId, onClose, onClaimed }: ClaimModalProps
     if (!p || p <= 0) { toast('Enter a valid price', 'error'); return; }
     setSaving(true);
     try {
-      const res = await fetch('/api/business-products', {
+      // Copies the catalog row into a NEW product owned by this store, at the
+      // price/stock entered here — so the listing is truly the store's own.
+      const res = await fetch('/api/products/copy', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
           supplierId,
-          productId:   product.id,
-          customPrice: p,
-          stockQty:    parseInt(stockQty) || 0,
+          productId: product.id,
+          price:     p,
+          stock:     parseInt(stockQty) || 0,
         }),
       });
+      const data = await res.json().catch(() => null);
       if (res.ok) {
-        toast(`✅ "${product.name}" added to your store!`, 'success');
+        toast(
+          data?.alreadyCopied
+            ? `"${product.name}" is already in your store`
+            : `✅ "${product.name}" added to your store!`,
+          data?.alreadyCopied ? 'default' : 'success',
+        );
         onClaimed();
         onClose();
       } else {
-        const err = await res.json();
-        toast(err.error ?? 'Failed to add product', 'error');
+        toast(data?.error ?? 'Failed to add product', 'error');
       }
     } catch {
       toast('Network error', 'error');

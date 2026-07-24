@@ -41,6 +41,8 @@ function mapProduct(p: Record<string, unknown>) {
     isB2b:         Boolean(p.is_b2b ?? false),
     moq:           (p.moq as number) ?? 1,
     taxMode:       (p.tax_mode as 'none' | 'included' | 'excluded') ?? 'none',
+    // Provenance for a copied listing (migration_v4_0) — absent column → null.
+    copiedFromProductId: (p.copied_from_product_id as number | undefined) ?? null,
   };
 }
 

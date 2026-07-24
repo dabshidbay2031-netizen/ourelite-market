@@ -22,13 +22,32 @@ import { NON_REVENUE_STATUSES } from '@/lib/revenue';
  * needsMigration.
  */
 const ONLINE_METHODS = new Set(['sifalo', 'waafi', 'evc', 'edahab']);
+/** Cash taken in person (POS) or on delivery. Tracked alongside online money. */
+const CASH_METHODS   = new Set(['cash', 'cod', 'cash_on_delivery']);
 
 type SB = ReturnType<typeof getSupabaseAdmin>;
 
-interface Payout { id: number; supplierId: number; amount: number; phone: string; createdAt: string; }
+export interface Payout {
+  id: number; supplierId: number; amount: number; phone: string;
+  status: 'pending' | 'approved' | 'rejected';
+  note: string | null; createdAt: string; decidedAt: string | null;
+}
 interface Wallet {
-  onlineTotal: number; paidOut: number; balance: number;
+  /** Confirmed ONLINE payments since the wallet epoch (withdrawable). */
+  onlineTotal: number;
+  /** Cash taken since the wallet epoch (POS + cash-on-delivery). */
+  cashTotal: number;
+  /** onlineTotal + cashTotal — everything the store has collected. */
+  earnedTotal: number;
+  /** Approved + paid out. */
+  paidOut: number;
+  /** Requested but not yet decided — reserved, so it can't be double-spent. */
+  pending: number;
+  /** What can be requested right now: earned − paidOut − pending. */
+  balance: number;
   payoutNumber: string | null; payouts: Payout[]; needsMigration: boolean;
+  /** When this wallet started counting (null pre-migration). */
+  walletStartedAt: string | null;
 }
 
 function mapPayout(r: Record<string, unknown>): Payout {
@@ -37,7 +56,11 @@ function mapPayout(r: Record<string, unknown>): Payout {
     supplierId: r.supplier_id as number,
     amount:     Number(r.amount) || 0,
     phone:      (r.phone as string) ?? '',
+    // Pre-migration rows have no status column: they were instant payouts.
+    status:     ((r.status as string) ?? 'approved') as Payout['status'],
+    note:       (r.note as string | null) ?? null,
     createdAt:  r.created_at as string,
+    decidedAt:  (r.decided_at as string | null) ?? null,
   };
 }
 
@@ -55,7 +78,9 @@ function mapPayout(r: Record<string, unknown>): Payout {
  * a price snapshotted on the line item and only use the current price if none
  * was stored (pre-fix rows).
  */
-async function computeOnlineTotal(sb: SB, supplierId: number): Promise<number> {
+async function computeTotals(
+  sb: SB, supplierId: number, since: string | null,
+): Promise<{ online: number; cash: number }> {
   const [{ data: owned }, { data: claims }] = await Promise.all([
     sb.from('products').select('id, price').eq('supplier_id', supplierId),
     sb.from('business_products').select('product_id, custom_price').eq('supplier_id', supplierId),
@@ -64,64 +89,98 @@ async function computeOnlineTotal(sb: SB, supplierId: number): Promise<number> {
   for (const p of owned ?? [])  priceById.set(p.id as number,         Number(p.price) || 0);
   for (const c of claims ?? []) priceById.set(c.product_id as number, Number(c.custom_price) || 0); // claim overrides
 
-  const { data: orders } = await sb
-    .from('orders').select('items, payment_method, status, supplier_id, subtotal')
+  // The wallet epoch is what makes the balance start at zero: orders taken
+  // before the store's wallet was switched on are simply not counted.
+  let q = sb
+    .from('orders').select('items, payment_method, status, supplier_id, subtotal, created_at')
     .order('created_at', { ascending: false }).limit(1000);
+  if (since) q = q.gte('created_at', since);
+  const { data: orders } = await q;
 
-  let total = 0;
+  let online = 0;
+  let cash   = 0;
   for (const o of orders ?? []) {
-    if (!ONLINE_METHODS.has(String(o.payment_method))) continue;
+    const method   = String(o.payment_method);
+    const isOnline = ONLINE_METHODS.has(method);
+    const isCash   = CASH_METHODS.has(method);
+    if (!isOnline && !isCash) continue;
     if (NON_REVENUE_STATUSES.has(String(o.status))) continue;
 
+    let amount = 0;
     const attributed = (o as { supplier_id?: number | null }).supplier_id;
     if (attributed != null) {
       // Snapshot path: trust the amount recorded at sale time.
-      if (Number(attributed) === supplierId) total += Number(o.subtotal) || 0;
-      continue; // an attributed order belongs to exactly one store
+      if (Number(attributed) !== supplierId) continue; // belongs to another store
+      amount = Number(o.subtotal) || 0;
+    } else {
+      // Legacy fallback (no attribution): match this store's items. Prefer the
+      // price frozen on the line item; only reach for the current price if the
+      // order predates the snapshot.
+      if (priceById.size === 0) continue;
+      const items = Array.isArray(o.items) ? o.items : [];
+      for (const it of items) {
+        const line = it as { id: number; qty: number; price?: number };
+        const snap = line.price;
+        const price = snap != null && Number.isFinite(Number(snap)) ? Number(snap) : priceById.get(line.id);
+        if (price != null) amount += price * (Number(line.qty) || 0);
+      }
     }
 
-    // Legacy fallback (no attribution): match this store's items. Prefer the
-    // price frozen on the line item; only reach for the current price if the
-    // order predates the snapshot.
-    if (priceById.size === 0) continue;
-    const items = Array.isArray(o.items) ? o.items : [];
-    for (const it of items) {
-      const line = it as { id: number; qty: number; price?: number };
-      const snap = line.price;
-      const price = snap != null && Number.isFinite(Number(snap)) ? Number(snap) : priceById.get(line.id);
-      if (price != null) total += price * (Number(line.qty) || 0);
-    }
+    if (isOnline) online += amount;
+    else          cash   += amount;
   }
-  return Math.round(total * 100) / 100;
+  return {
+    online: Math.round(online * 100) / 100,
+    cash:   Math.round(cash   * 100) / 100,
+  };
 }
 
 async function loadWallet(sb: SB, supplierId: number): Promise<Wallet> {
-  const onlineTotal = await computeOnlineTotal(sb, supplierId);
-
   let needsMigration = false;
 
-  // Saved payout number (suppliers.payout_number — may not exist pre-migration)
+  // Saved payout number + wallet epoch (both may be missing pre-migration).
   let payoutNumber: string | null = null;
+  let walletStartedAt: string | null = null;
   const { data: supRow, error: supErr } = await sb
-    .from('suppliers').select('payout_number').eq('id', supplierId).maybeSingle();
-  if (!supErr) payoutNumber = (supRow?.payout_number as string | null) ?? null;
-  else if (isMissingColumnError(supErr)) needsMigration = true;
-  else throw supErr;
+    .from('suppliers').select('payout_number, wallet_started_at').eq('id', supplierId).maybeSingle();
+  if (!supErr) {
+    payoutNumber    = (supRow?.payout_number as string | null) ?? null;
+    walletStartedAt = (supRow?.wallet_started_at as string | null) ?? null;
+  } else if (isMissingColumnError(supErr)) {
+    needsMigration = true;
+    // Fall back to just the payout number on a pre-v4_1 schema.
+    const { data: legacy } = await sb
+      .from('suppliers').select('payout_number').eq('id', supplierId).maybeSingle();
+    payoutNumber = (legacy?.payout_number as string | null) ?? null;
+  } else throw supErr;
+
+  const { online: onlineTotal, cash: cashTotal } = await computeTotals(sb, supplierId, walletStartedAt);
+  const earnedTotal = Math.round((onlineTotal + cashTotal) * 100) / 100;
 
   // Payout ledger (payouts table — may not exist pre-migration)
   let payouts: Payout[] = [];
   let paidOut = 0;
+  let pending = 0;
   const { data: prows, error: pErr } = await sb
     .from('payouts').select('*').eq('supplier_id', supplierId)
     .order('created_at', { ascending: false });
   if (!pErr) {
     payouts = (prows ?? []).map(r => mapPayout(r as Record<string, unknown>));
-    paidOut = Math.round(payouts.reduce((s, p) => s + p.amount, 0) * 100) / 100;
+    // A rejected request costs nothing; a pending one is reserved so the same
+    // money can't be requested twice while an admin is still deciding.
+    paidOut = payouts.filter(p => p.status === 'approved').reduce((s, p) => s + p.amount, 0);
+    pending = payouts.filter(p => p.status === 'pending').reduce((s, p) => s + p.amount, 0);
+    paidOut = Math.round(paidOut * 100) / 100;
+    pending = Math.round(pending * 100) / 100;
   } else if (isMissingTableError(pErr)) needsMigration = true;
   else throw pErr;
 
-  const balance = Math.max(0, Math.round((onlineTotal - paidOut) * 100) / 100);
-  return { onlineTotal, paidOut, balance, payoutNumber, payouts, needsMigration };
+  const balance = Math.max(0, Math.round((earnedTotal - paidOut - pending) * 100) / 100);
+  return {
+    onlineTotal, cashTotal, earnedTotal,
+    paidOut, pending, balance,
+    payoutNumber, payouts, needsMigration, walletStartedAt,
+  };
 }
 
 /** Auth: signed-in owner of `supplierId` (or admin). Returns the id or a Response. */
@@ -172,7 +231,13 @@ export async function PATCH(req: Request) {
   return NextResponse.json({ success: true, payoutNumber: phone });
 }
 
-/** POST /api/payouts — record a payout; deducts the exact amount from balance. */
+/**
+ * POST /api/payouts — REQUEST a payout.
+ *
+ * Creates a `pending` request; the amount is reserved against the balance so it
+ * can't be requested twice. An admin approves or rejects it via
+ * PATCH /api/admin/payouts. Money only leaves on approval.
+ */
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const supplierId = parseInt(String(body.supplierId ?? ''), 10);
@@ -194,24 +259,35 @@ export async function POST(req: Request) {
   if (!wallet.payoutNumber) {
     return NextResponse.json({ error: 'Save your payout number first' }, { status: 400 });
   }
+  // `balance` already excludes anything pending, so this also blocks requesting
+  // the same money twice while an earlier request is still awaiting a decision.
   if (amount > wallet.balance + 0.001) {
-    return NextResponse.json({ error: `Amount exceeds your balance ($${wallet.balance.toFixed(2)})` }, { status: 400 });
+    return NextResponse.json({
+      error: wallet.pending > 0
+        ? `Amount exceeds your available balance ($${wallet.balance.toFixed(2)}) — you have $${wallet.pending.toFixed(2)} awaiting approval`
+        : `Amount exceeds your balance ($${wallet.balance.toFixed(2)})`,
+    }, { status: 400 });
   }
 
+  const now = new Date().toISOString();
   const { error } = await sb.from('payouts').insert({
     supplier_id: supplierId, amount, phone: wallet.payoutNumber,
+    status: 'pending', requested_at: now,
   });
   if (error) {
     if (isMissingTableError(error)) {
       return NextResponse.json({ error: 'payouts table missing — run migration_payouts.sql', needsMigration: true }, { status: 500 });
+    }
+    if (isMissingColumnError(error)) {
+      return NextResponse.json({ error: 'Payout approvals not enabled yet — run migration_v4_1.sql', needsMigration: true }, { status: 501 });
     }
     return NextResponse.json({ error: errMsg(error) }, { status: 500 });
   }
 
   // Return the refreshed wallet so the client updates the balance immediately.
   try {
-    return NextResponse.json({ success: true, ...(await loadWallet(sb, supplierId)) }, { status: 201 });
+    return NextResponse.json({ success: true, requested: amount, ...(await loadWallet(sb, supplierId)) }, { status: 201 });
   } catch {
-    return NextResponse.json({ success: true }, { status: 201 });
+    return NextResponse.json({ success: true, requested: amount }, { status: 201 });
   }
 }

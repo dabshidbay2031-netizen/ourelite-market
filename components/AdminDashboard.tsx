@@ -13,7 +13,14 @@ import type { HeroBanner } from '@/app/api/settings/hero/route';
 
 /* ── Types ──────────────────────────────────────────────────────────── */
 type AdminRole = 'admin' | 'semi_admin' | null;
-type Tab = 'overview' | 'businesses' | 'products' | 'orders' | 'users' | 'team' | 'storefront';
+type Tab = 'overview' | 'businesses' | 'products' | 'orders' | 'users' | 'team' | 'storefront' | 'payouts';
+
+/** A shop's payout request, as served by /api/admin/payouts. */
+interface AdminPayout {
+  id: number; supplierId: number; storeName: string; storeIcon: string;
+  amount: number; phone: string; status: string;
+  note: string | null; createdAt: string; decidedAt: string | null;
+}
 
 interface AdminStats {
   totalBusinesses: number; totalSuppliers: number; totalProducts: number;
@@ -225,6 +232,45 @@ export default function AdminDashboard() {
   // requires a stable, unconditional hook order).
   const [bountyDraft, setBountyDraft] = useState<Record<number, string>>({});
 
+  /* ── Payout requests (admin desk) ──────────────────────────────── */
+  const [payouts, setPayouts] = useState<AdminPayout[]>([]);
+  const [payoutTotals, setPayoutTotals] = useState({ pending: 0, approved: 0, pendingCount: 0 });
+  const [payoutFilter, setPayoutFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
+  const [payoutNote, setPayoutNote] = useState<Record<number, string>>({});
+  const [decidingId, setDecidingId] = useState<number | null>(null);
+
+  const loadPayouts = useCallback(async (filter: string) => {
+    try {
+      const qs  = filter === 'all' ? '' : `?status=${filter}`;
+      const res = await fetch(`/api/admin/payouts${qs}`, { headers: await authHeaders(), cache: 'no-store' });
+      const d   = await res.json();
+      if (Array.isArray(d?.payouts)) setPayouts(d.payouts);
+      if (d?.totals) setPayoutTotals(d.totals);
+    } catch { /* keep what's on screen */ }
+  }, []);
+
+  // Keep the tab's pending badge honest even while another tab is open.
+  useEffect(() => { if (role) loadPayouts(payoutFilter); }, [role, payoutFilter, loadPayouts]);
+
+  const decidePayout = async (id: number, status: 'approved' | 'rejected') => {
+    setDecidingId(id);
+    try {
+      const res = await fetch('/api/admin/payouts', {
+        method: 'PATCH', headers: await authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ id, status, note: payoutNote[id]?.trim() || null }),
+      });
+      const d = await res.json().catch(() => null);
+      if (res.ok) {
+        toast(status === 'approved' ? 'Payout approved ✓' : 'Payout rejected', status === 'approved' ? 'success' : 'default');
+        setPayoutNote(n => ({ ...n, [id]: '' }));
+        await loadPayouts(payoutFilter);
+      } else {
+        toast(d?.error ?? 'Could not update the request', 'error');
+      }
+    } catch { toast('Network error', 'error'); }
+    finally { setDecidingId(null); }
+  };
+
   /* ── Guards ────────────────────────────────────────────────────── */
   if (checking) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'80vh', flexDirection:'column', gap:12 }}>
@@ -417,6 +463,7 @@ export default function AdminDashboard() {
     { key:'orders',      label:'🧾 Orders'      },
     { key:'users',       label:'👥 Users'       },
     ...(isAdmin ? [
+      { key:'payouts'    as Tab, label: payoutTotals.pendingCount > 0 ? `💸 Payouts (${payoutTotals.pendingCount})` : '💸 Payouts' },
       { key:'storefront' as Tab, label:'🎨 Storefront' },
       { key:'team'       as Tab, label:'👑 Team' },
     ] : []),
@@ -879,6 +926,108 @@ export default function AdminDashboard() {
                     </table>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* ── PAYOUTS (admin only) ────────────────────────────── */}
+            {tab === 'payouts' && isAdmin && (
+              <div>
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontWeight: 700, fontSize: '1rem' }}>💸 Payout Requests</div>
+                  <div style={{ fontSize: '.8rem', color: 'var(--text-muted)' }}>
+                    Shops request a withdrawal from the money they&apos;ve collected. Approving marks it paid — send the
+                    money to the listed number, then approve here. Rejecting returns the amount to the shop&apos;s balance.
+                  </div>
+                </div>
+
+                {/* Money at a glance */}
+                <div style={{ display:'flex', gap:12, flexWrap:'wrap', marginBottom:14 }}>
+                  <div style={{ flex:'1 1 160px', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:12, padding:'12px 14px' }}>
+                    <div style={{ fontSize:'.72rem', color:'var(--text-muted)', fontWeight:700, textTransform:'uppercase' }}>Awaiting approval</div>
+                    <div style={{ fontSize:'1.5rem', fontWeight:800, color:'#d97706' }}>${payoutTotals.pending.toFixed(2)}</div>
+                    <div style={{ fontSize:'.75rem', color:'var(--text-muted)' }}>{payoutTotals.pendingCount} request{payoutTotals.pendingCount !== 1 ? 's' : ''}</div>
+                  </div>
+                  <div style={{ flex:'1 1 160px', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:12, padding:'12px 14px' }}>
+                    <div style={{ fontSize:'.72rem', color:'var(--text-muted)', fontWeight:700, textTransform:'uppercase' }}>Paid out</div>
+                    <div style={{ fontSize:'1.5rem', fontWeight:800, color:'#059669' }}>${payoutTotals.approved.toFixed(2)}</div>
+                  </div>
+                </div>
+
+                {/* Status filter */}
+                <div style={{ display:'flex', gap:6, marginBottom:12, flexWrap:'wrap' }}>
+                  {(['pending','approved','rejected','all'] as const).map(f => (
+                    <button key={f} className={`chip ${payoutFilter === f ? 'active' : ''}`} onClick={() => setPayoutFilter(f)}>
+                      {f === 'pending' ? '⏳ Pending' : f === 'approved' ? '✓ Approved' : f === 'rejected' ? '✕ Rejected' : 'All'}
+                    </button>
+                  ))}
+                </div>
+
+                {payouts.length === 0 ? (
+                  <div className="empty-state" style={{ padding:'40px 16px' }}>
+                    <div className="empty-icon">💸</div>
+                    <div className="empty-title">No {payoutFilter === 'all' ? '' : payoutFilter} payout requests</div>
+                    <div className="empty-sub">Requests from shops show up here for approval.</div>
+                  </div>
+                ) : (
+                  <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+                    {payouts.map(p => (
+                      <div key={p.id} style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:12, padding:'12px 14px' }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                          <span style={{ width:34, height:34, flexShrink:0, borderRadius:8, overflow:'hidden', display:'grid', placeItems:'center', fontSize:20, background:'var(--bg)', border:'1px solid var(--border)' }}>
+                            <StoreAvatar value={p.storeIcon} />
+                          </span>
+                          <div style={{ minWidth:0, flex:1 }}>
+                            <div style={{ fontWeight:700 }}>{p.storeName}</div>
+                            <div style={{ fontSize:'.75rem', color:'var(--text-muted)' }}>
+                              📞 {p.phone || 'no number saved'} · {new Date(p.createdAt).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })}
+                            </div>
+                          </div>
+                          <div style={{ fontSize:'1.15rem', fontWeight:800 }}>${p.amount.toFixed(2)}</div>
+                          <span style={{
+                            fontSize:'.68rem', fontWeight:800, padding:'3px 10px', borderRadius:99, whiteSpace:'nowrap',
+                            background: p.status === 'approved' ? '#d1fae5' : p.status === 'rejected' ? '#fee2e2' : '#fef3c7',
+                            color:      p.status === 'approved' ? '#059669' : p.status === 'rejected' ? '#dc2626' : '#d97706',
+                          }}>
+                            {p.status === 'approved' ? '✓ Paid' : p.status === 'rejected' ? '✕ Rejected' : '⏳ Pending'}
+                          </span>
+                        </div>
+
+                        {p.note && (
+                          <div style={{ marginTop:8, fontSize:'.78rem', color:'var(--text-muted)', fontStyle:'italic' }}>
+                            Note: “{p.note}”
+                          </div>
+                        )}
+
+                        {p.status === 'pending' && (
+                          <div style={{ marginTop:10, display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
+                            <input
+                              className="form-input"
+                              style={{ flex:'1 1 200px', padding:'6px 10px', fontSize:'.82rem' }}
+                              placeholder="Note for the shop (optional)"
+                              value={payoutNote[p.id] ?? ''}
+                              onChange={e => setPayoutNote(n => ({ ...n, [p.id]: e.target.value }))}
+                            />
+                            <button
+                              className="btn btn-primary btn-sm"
+                              disabled={decidingId === p.id}
+                              onClick={() => decidePayout(p.id, 'approved')}
+                            >
+                              {decidingId === p.id ? '…' : '✓ Approve & mark paid'}
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              style={{ color:'var(--danger)' }}
+                              disabled={decidingId === p.id}
+                              onClick={() => decidePayout(p.id, 'rejected')}
+                            >
+                              ✕ Reject
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
