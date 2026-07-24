@@ -43,7 +43,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  { const denied = await requireStaff(req); if (denied) return denied; }
+  { const denied = await requireStaff(req, 'pos'); if (denied) return denied; }
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });

@@ -9,7 +9,7 @@ import { useAuth } from '@/context/AuthContext';
 import { authHeaders } from '@/lib/clientAuth';
 import { useMyProductIds } from '@/lib/useMyProductIds';
 import { CATEGORIES } from '@/lib/data';
-import { enqueueOrder, getQueue, dequeueOrder } from '@/lib/offlineQueue';
+import { enqueueOrder, queueCount, onQueueChange } from '@/lib/offlineQueue';
 import { useCashier } from '@/context/CashierContext';
 import { readReceiptAutoPrintSetting } from '@/lib/receiptSettings';
 import type { CartItem, Customer, PaymentMethod, PosSession } from '@/lib/types';
@@ -57,39 +57,24 @@ function writeParked(carts: ParkedCart[]) {
   try { localStorage.setItem(PARK_KEY, JSON.stringify(carts)); } catch { /* storage full */ }
 }
 
-/* ── Offline sync indicator ──────────────────────────────────── */
+/* ── Offline sync indicator ──────────────────────────────────────
+   The actual uploading now happens app-wide in <SyncManager>; this badge just
+   reflects the shared queue count so the cashier sees how many sales are still
+   waiting to reach the server. */
 function OfflineBadge() {
   const [count, setCount] = useState(0);
-  const [syncing, setSyncing] = useState(false);
-
-  const refresh = useCallback(() => setCount(getQueue().length), []);
-
   useEffect(() => {
+    const refresh = () => setCount(queueCount());
     refresh();
-    async function replay() {
-      const q = getQueue();
-      if (!q.length) return;
-      setSyncing(true);
-      for (const item of q) {
-        try {
-          const res = await fetch('/api/orders', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(item.payload),
-          });
-          if (res.ok) dequeueOrder(item.localId);
-        } catch { /* still offline */ }
-      }
-      setSyncing(false);
-      refresh();
-    }
-    window.addEventListener('online', replay);
-    return () => window.removeEventListener('online', replay);
-  }, [refresh]);
+    const off = onQueueChange(refresh);
+    window.addEventListener('online', refresh);
+    return () => { off(); window.removeEventListener('online', refresh); };
+  }, []);
 
   if (!count) return null;
   return (
-    <span className="offline-sync-badge" title="Sales queued offline — will sync when back online">
-      {syncing ? '↻' : '⚠'} {count} pending sync
+    <span className="offline-sync-badge" title="Sales queued offline — syncing when back online">
+      ⏳ {count} pending sync
     </span>
   );
 }
@@ -235,12 +220,36 @@ export default function POSPage() {
   const changeDue = Math.max(0, splitTotal - posNet);
 
   /* ── Session handlers ────────────────────────────────────────── */
+  // Build a device-local register so the POS is fully usable OFFLINE. Its sales
+  // still attribute to the store (supplier + cashier); they carry no DB session
+  // link, which is fine — the server drops the missing session_id on sync.
+  function makeLocalSession(): PosSession {
+    return {
+      id:            `LOCAL-SESSION-${Date.now().toString(36).toUpperCase()}`,
+      openedBy:      user?.id ?? cashier?.id ?? 'offline',
+      cashierName:   cashierName.trim(),
+      openedAt:      new Date().toISOString(),
+      closedAt:      null,
+      openingFloat:  parseFloat(openingFloat) || 0,
+      closingCounted: null, expectedCash: null, discrepancy: null,
+      status:        'open', notes: null, local: true,
+    };
+  }
+
   async function handleOpenSession() {
     if (!cashierName.trim()) { toast('Enter cashier name', 'error'); return; }
     setOpeningSession(true);
+    // Offline up front → open a local register immediately, no network attempt.
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setSession(makeLocalSession());
+      setShowOpenModal(false);
+      toast('Register opened offline — sales sync when you reconnect', 'warning');
+      setOpeningSession(false);
+      return;
+    }
     try {
       const res = await fetch('/api/pos-sessions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           openedBy:     user?.id ?? 'anonymous',
           cashierName:  cashierName.trim(),
@@ -255,7 +264,11 @@ export default function POSPage() {
         toast('Failed to open session', 'error');
       }
     } catch {
-      toast('Network error', 'error');
+      // Network dropped mid-request → fall back to a local register so the
+      // cashier is never blocked from selling.
+      setSession(makeLocalSession());
+      setShowOpenModal(false);
+      toast('Register opened offline — sales sync when you reconnect', 'warning');
     }
     setOpeningSession(false);
   }
@@ -266,6 +279,7 @@ export default function POSPage() {
     setCloseNotes('');
     setSessionReport(null);
     setShowCloseModal(true);
+    if (session.local) return; // no server report for an offline register
     try {
       const res = await fetch(`/api/pos-sessions/${session.id}`);
       if (res.ok) {
@@ -283,9 +297,18 @@ export default function POSPage() {
   async function handleCloseSession() {
     if (!session || session === 'loading') return;
     setClosingSession(true);
+    // A LOCAL (offline) register has no DB row to close — just clear it here.
+    if (session.local) {
+      setSession(null);
+      setShowCloseModal(false);
+      setPosCart([]);
+      toast('Register closed', 'success');
+      setClosingSession(false);
+      return;
+    }
     try {
       const res = await fetch(`/api/pos-sessions/${session.id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        method: 'PATCH', headers: await authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ closingCounted: parseFloat(closingCounted) || 0, notes: closeNotes }),
       });
       if (res.ok) {
@@ -405,7 +428,9 @@ export default function POSPage() {
       items:         posCart.map(i => ({ id: i.id, qty: i.qty })),
       paymentMethod: payMethod,
       discount:      posDiscountNum,               // manual staff discount (server clamps + verifies staff)
-      sessionId:     session && session !== 'loading' ? session.id   : null,
+      // A LOCAL (offline) register has no DB session row, so send no session_id
+      // — the sale still counts as in-store via the cashier name.
+      sessionId:     session && session !== 'loading' && !session.local ? session.id   : null,
       cashierName:   session && session !== 'loading' ? session.cashierName : null,
       supplierId:    currentSupplier?.id ?? null,   // this register's store (dashboard attribution)
       notes:         notesParts.length ? notesParts.join(' | ') : null,
@@ -473,7 +498,7 @@ export default function POSPage() {
           items:         posCart.map(i => ({ id: i.id, qty: i.qty })),
           paymentMethod: 'invoice',
           status:        'completed',
-          sessionId:     session && session !== 'loading' ? session.id : null,
+          sessionId:     session && session !== 'loading' && !session.local ? session.id : null,
           cashierName:   session && session !== 'loading' ? session.cashierName : null,
           supplierId:    currentSupplier.id,
           notes:         `Invoiced to ${customer.name} — pay later`,

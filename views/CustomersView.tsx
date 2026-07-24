@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import Header from '@/components/Header';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
+import { useStoreActor } from '@/lib/useStoreActor';
 import { authHeaders } from '@/lib/clientAuth';
 import { useMyProductIds } from '@/lib/useMyProductIds';
 import type { Customer } from '@/lib/types';
@@ -54,8 +55,10 @@ interface Invoice {
 /* ─── Component ──────────────────────────────────── */
 export default function CustomersPage() {
   const { state, toast, reloadProducts } = useApp();
-  const { user, currentSupplier } = useAuth();
-  const supplierId = currentSupplier?.id ?? null;
+  const { user } = useAuth();
+  // Works for the owner AND a staff cashier operating the store.
+  const actor = useStoreActor();
+  const supplierId = actor.storeId;
   const products = state.products;
 
   // Only THIS store's products are invoiceable — owned catalog rows plus
@@ -361,7 +364,7 @@ export default function CustomersPage() {
   function handlePrint() {
     if (!invoiceCust || invItems.length === 0) { toast('Add at least one product', 'error'); return; }
 
-    const storeName = currentSupplier?.name ?? 'Hamar Mall Store';
+    const storeName = actor.store?.name ?? 'Hamar Mall Store';
 
     const invNum = `INV-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
     const date   = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });

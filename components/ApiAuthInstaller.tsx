@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { getSupabase } from '@/lib/supabase';
+import { readCashierToken } from '@/lib/cashierSession';
 
 /**
  * Installs a one-time global fetch interceptor that attaches the current
@@ -54,11 +55,19 @@ export default function ApiAuthInstaller() {
     }
 
     // Synchronous: no await, no getSession, no network — just attach the
-    // cached token when we have one.
+    // cached credentials when we have them. A STAFF cashier has no Supabase
+    // JWT, so their signed token rides along in X-Cashier-Token.
     window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
-      if (!currentToken || !isApi(input) || hasAuth(init, input)) return orig(input, init);
+      if (!isApi(input)) return orig(input, init);
+
+      const cashierToken = readCashierToken();
+      const needsAuth    = currentToken && !hasAuth(init, input);
+      if (!needsAuth && !cashierToken) return orig(input, init);
+
       const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
-      headers.set('Authorization', `Bearer ${currentToken}`);
+      if (needsAuth) headers.set('Authorization', `Bearer ${currentToken}`);
+      if (cashierToken && !headers.has('x-cashier-token')) headers.set('X-Cashier-Token', cashierToken);
+
       if (input instanceof Request && !init) return orig(new Request(input, { headers }));
       return orig(input, { ...init, headers });
     };

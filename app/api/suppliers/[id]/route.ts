@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { errMsg, isMissingColumnError } from '@/lib/apiHelpers';
-import { getAuthUser, getAdminRole } from '@/lib/apiAuth';
+import { getAuthUser, getAdminRole, canAccessStore } from '@/lib/apiAuth';
+import { getCashierActor } from '@/lib/cashierAuth';
 import { isValidSlug } from '@/lib/slug';
 
 /** Privileged fields only a platform admin may change (not the store owner). */
@@ -62,16 +63,14 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const id = parseInt((await params).id, 10);
 
-  // ── Authorize: must be the store's owner OR a platform admin ──────────
+  // ── Authorize: admin, the store OWNER, or a STAFF cashier with 'settings' ──
   const user = await getAuthUser(req);
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const adminRole = await getAdminRole(req);
+  const adminRole = user ? await getAdminRole(req) : null;
   const isAdmin = adminRole === 'admin';
   if (!isAdmin) {
-    const { data: owner } = await getSupabaseAdmin()
-      .from('suppliers').select('auth_user_id').eq('id', id).maybeSingle();
-    if (!owner) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-    if (String(owner.auth_user_id) !== user.id) {
+    if (!(await canAccessStore(req, id, 'settings'))) {
+      const actor = user ? null : await getCashierActor(req);
+      if (!user && !actor) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
       return NextResponse.json({ error: 'Forbidden — not your store' }, { status: 403 });
     }
   }

@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Header from '@/components/Header';
-import { useAuth } from '@/context/AuthContext';
 import { useCashier } from '@/context/CashierContext';
+import { useStoreActor } from '@/lib/useStoreActor';
+import { authHeaders } from '@/lib/clientAuth';
 import { PRIVILEGES, DEFAULT_PRIVILEGES } from '@/lib/cashierPrivileges';
 
 interface Cashier {
@@ -33,7 +34,8 @@ function PrivilegeTags({ keys }: { keys: string[] }) {
 
 /* ── Main view ─────────────────────────────────────────────── */
 export default function StaffView() {
-  const { user } = useAuth();
+  // Owner OR a staff cashier granted 'staff' can manage the store's cashiers.
+  const actor = useStoreActor();
   const { cashier, updateCashierSession, logoutCashier } = useCashier();
 
   const [cashiers,  setCashiers]  = useState<Cashier[]>([]);
@@ -57,14 +59,14 @@ export default function StaffView() {
   const [pwSaving,    setPwSaving]    = useState(false);
 
   const load = useCallback(async () => {
-    if (!user?.id) return;
+    if (!actor.ownerUserId) return;
     setFetching(true);
     try {
-      const res = await fetch(`/api/cashiers?businessId=${user.id}`);
+      const res = await fetch(`/api/cashiers?businessId=${actor.ownerUserId}`, { headers: await authHeaders() });
       if (res.ok) setCashiers(await res.json());
     } catch { /* offline */ }
     setFetching(false);
-  }, [user?.id]);
+  }, [actor.ownerUserId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -109,13 +111,13 @@ export default function StaffView() {
       let res: Response;
       if (editing) {
         res = await fetch(`/api/cashiers/${editing.id}`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          method: 'PATCH', headers: await authHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ name: form.name, phone: form.phone, privileges: privs }),
         });
       } else {
         res = await fetch('/api/cashiers', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ businessId: user!.id, name: form.name, phone: form.phone, password: form.password, privileges: privs }),
+          method: 'POST', headers: await authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ businessId: actor.ownerUserId, name: form.name, phone: form.phone, password: form.password, privileges: privs }),
         });
       }
       const data = await res.json();
@@ -152,7 +154,7 @@ export default function StaffView() {
   /* ── Toggle active ── */
   async function toggleActive(c: Cashier) {
     const res = await fetch(`/api/cashiers/${c.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: await authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ isActive: !c.isActive }),
     });
     if (res.ok) {
@@ -191,7 +193,7 @@ export default function StaffView() {
     setPwSaving(true);
     try {
       const res = await fetch(`/api/cashiers/${pwTarget!.id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        method: 'PATCH', headers: await authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ password: newPw }),
       });
       if (res.ok) { setShowPwModal(false); }

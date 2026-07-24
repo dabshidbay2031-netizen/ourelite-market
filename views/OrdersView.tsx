@@ -7,6 +7,7 @@ import Header from '@/components/Header';
 import { authHeaders } from '@/lib/clientAuth';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
+import { useStoreActor } from '@/lib/useStoreActor';
 import { useLiveRefresh } from '@/lib/useLiveRefresh';
 import { useRealtimePing } from '@/lib/useRealtimePing';
 import ErrorState from '@/components/ErrorState';
@@ -55,8 +56,14 @@ export default function OrdersPage() {
   const { products, suppliers } = state;
 
   // Sellers (business/supplier with a store) also get a "My Store" tab showing
-  // the orders their store has received. Everyone else only sees "My Orders".
-  const isSeller = (accountType === 'business' || accountType === 'supplier') && !!currentSupplier;
+  // the orders their store has received. STAFF cashiers granted 'orders' get
+  // the same tab for the store they work at — it's their only tab, since a
+  // cashier has no personal purchase history.
+  const actor      = useStoreActor();
+  const staffOrders = actor.isStaff && actor.can('orders') && actor.storeId != null;
+  const storeId    = actor.storeId ?? currentSupplier?.id ?? null;
+  const isSeller   = staffOrders
+    || ((accountType === 'business' || accountType === 'supplier') && !!currentSupplier);
 
   const [orders, setOrders]         = useState<Order[]>([]);
   const [loading, setLoading]       = useState(true);
@@ -67,14 +74,15 @@ export default function OrdersPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
 
-  // Non-sellers can never be on the store tab.
-  const activeTab: Tab = isSeller ? tab : 'mine';
+  // Non-sellers can never be on the store tab. Staff have ONLY the store tab
+  // (no personal orders), so force them onto it.
+  const activeTab: Tab = actor.isStaff ? 'store' : (isSeller ? tab : 'mine');
 
   const loadOrders = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const url = activeTab === 'store' && currentSupplier
-        ? `/api/orders?supplierId=${currentSupplier.id}`
+      const url = activeTab === 'store' && storeId != null
+        ? `/api/orders?supplierId=${storeId}`
         : user ? `/api/orders?userId=${user.id}` : null;
       if (!url) { setOrders([]); if (!silent) setLoading(false); return; }
       // Orders carry customer PII — the API requires the caller's JWT.
@@ -90,13 +98,13 @@ export default function OrdersPage() {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [user, activeTab, currentSupplier]);
+  }, [user, activeTab, storeId]);
 
   useEffect(() => { loadOrders(); }, [loadOrders]);
   // Live: realtime ping the instant an order lands or changes (my orders via
   // user topic, my store's via store topic), with a relaxed poll as fallback.
   useRealtimePing(
-    [user ? `user:${user.id}` : null, currentSupplier ? `store:${currentSupplier.id}` : null],
+    [user ? `user:${user.id}` : null, storeId != null ? `store:${storeId}` : null],
     () => loadOrders(true),
   );
   useLiveRefresh(() => loadOrders(true), { intervalMs: 30000 });
@@ -132,8 +140,22 @@ export default function OrdersPage() {
     }
   };
 
-  // ── Not logged in ────────────────────────────────────────
-  if (!authLoading && !user) {
+  // ── Staff signed in but not granted orders ───────────────
+  if (actor.isStaff && !actor.can('orders')) {
+    return (
+      <div className="page-anim">
+        <Header showSearch={false} />
+        <div className="empty-state" style={{ marginTop: 60 }}>
+          <div className="empty-icon">🔒</div>
+          <div className="empty-title">Orders aren&apos;t part of your role</div>
+          <div className="empty-sub">Ask the store owner to grant you the View Orders permission.</div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Nobody signed in (no owner session AND no staff session) ──
+  if (!authLoading && !user && !actor.isStaff) {
     return (
       <div className="page-anim">
         <Header showSearch={false} />
@@ -158,8 +180,9 @@ export default function OrdersPage() {
         </div>
       </div>
 
-      {/* Tab toggle — only sellers (business/supplier) get the "My Store" tab */}
-      {isSeller && (
+      {/* Tab toggle — only sellers get the "My Store" tab. Staff work a single
+          store inbox, so no toggle for them. */}
+      {isSeller && !actor.isStaff && (
         <div style={{ padding: '0 16px 12px' }}>
           <div className="acct-type-toggle" style={{ maxWidth: 340 }}>
             <button className={`acct-type-btn ${activeTab === 'mine' ? 'active' : ''}`} onClick={() => setTab('mine')}>

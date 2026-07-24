@@ -1,9 +1,9 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { mergeCashierSession, type CashierSessionSnapshot } from '@/lib/cashierSession';
+import { mergeCashierSession, CASHIER_SESSION_KEY, type CashierSessionSnapshot } from '@/lib/cashierSession';
 
-const SESSION_KEY = 'mg_cashier_session';
+const SESSION_KEY = CASHIER_SESSION_KEY;
 
 export interface CashierSession {
   id:         string;
@@ -12,6 +12,8 @@ export interface CashierSession {
   businessId: string;
   privileges: string[];
   loginAt:    string;
+  /** Signed API credential (X-Cashier-Token). Staff have no Supabase JWT. */
+  token?:     string;
 }
 
 interface CashierContextValue {
@@ -71,6 +73,45 @@ export function CashierProvider({ children }: { children: React.ReactNode }) {
     setCashier(null);
     persistCashier(null);
   }, [persistCashier]);
+
+  /**
+   * Live privilege sync — poll the server for this cashier's current row so an
+   * owner's change (new/removed privileges, or deactivation) takes effect
+   * WITHOUT the staff member logging out and back in. A 401 means the account
+   * was deactivated (or the token is void) → sign them out immediately.
+   */
+  useEffect(() => {
+    const token = cashier?.token;
+    if (!token) return;
+
+    let stopped = false;
+    const sync = async () => {
+      try {
+        const res = await fetch('/api/cashiers/me', { headers: { 'X-Cashier-Token': token }, cache: 'no-store' });
+        if (stopped) return;
+        if (res.status === 401) { logoutCashier(); return; }
+        if (!res.ok) return;
+        const me = await res.json();
+        const next = Array.isArray(me.privileges) ? me.privileges : [];
+        setCashier(prev => {
+          if (!prev) return prev;
+          // Only rewrite (and re-persist) when something actually changed.
+          const same = prev.name === me.name
+            && JSON.stringify(prev.privileges) === JSON.stringify(next);
+          if (same) return prev;
+          const merged = { ...prev, name: me.name ?? prev.name, privileges: next };
+          persistCashier(merged);
+          return merged;
+        });
+      } catch { /* offline — keep the last known privileges */ }
+    };
+
+    sync(); // immediately on login/mount
+    const id = setInterval(sync, 30000);
+    const onFocus = () => sync();
+    window.addEventListener('focus', onFocus);
+    return () => { stopped = true; clearInterval(id); window.removeEventListener('focus', onFocus); };
+  }, [cashier?.token, logoutCashier, persistCashier]);
 
   return (
     <CashierContext.Provider value={{ cashier, cashierLoading, loginAsCashier, updateCashierSession, logoutCashier }}>

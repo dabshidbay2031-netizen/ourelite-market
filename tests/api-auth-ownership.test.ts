@@ -14,9 +14,14 @@ let adminRole: 'admin' | 'semi_admin' | null = null;    // caller's admins row
 
 function builder(table: string) {
   const b: Record<string, unknown> = {};
-  for (const m of ['select', 'eq', 'in', 'order', 'limit', 'lt', 'neq', 'is', 'update', 'insert', 'upsert', 'delete']) {
+  // Capture an .eq('auth_user_id', X) so the suppliers lookup honours it —
+  // requireSupplierAccess/canAccessStore filter ownership IN the query, so the
+  // mock must return null when the caller isn't the owner.
+  let authUserFilter: string | undefined;
+  for (const m of ['select', 'in', 'order', 'limit', 'lt', 'neq', 'is', 'update', 'insert', 'upsert', 'delete']) {
     b[m] = () => b;
   }
+  b.eq = (col: string, val: unknown) => { if (col === 'auth_user_id') authUserFilter = String(val); return b; };
   b.maybeSingle = () => {
     if (table === 'conversations') {
       return Promise.resolve({ data: participants ? { user_id_1: participants[0], user_id_2: participants[1] } : null, error: null });
@@ -25,7 +30,9 @@ function builder(table: string) {
       return Promise.resolve({ data: adminRole ? { role: adminRole, user_id: authedUser?.id } : null, error: null });
     }
     if (table === 'suppliers') {
-      return Promise.resolve({ data: supplierOwner ? { auth_user_id: supplierOwner } : null, error: null });
+      // Honour .eq('auth_user_id', X): the store only "matches" its true owner.
+      const ownerMatches = authUserFilter === undefined || authUserFilter === supplierOwner;
+      return Promise.resolve({ data: supplierOwner && ownerMatches ? { id: 1, auth_user_id: supplierOwner } : null, error: null });
     }
     return Promise.resolve({ data: null, error: null });
   };

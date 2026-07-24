@@ -31,6 +31,7 @@ import InstallPrompt     from '@/components/InstallPrompt';
 import WishlistSync      from '@/components/WishlistSync';
 import ApiAuthInstaller  from '@/components/ApiAuthInstaller';
 import OfflineBanner     from '@/components/OfflineBanner';
+import SyncManager       from '@/components/SyncManager';
 import AiAssistant       from '@/components/AiAssistant';
 import PushManager       from '@/components/PushManager';
 
@@ -72,6 +73,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <AppProvider>
               <ApiAuthInstaller />
               <OfflineBanner />
+              <SyncManager />
               <Sidebar />
               <div id="app">
                 {children}

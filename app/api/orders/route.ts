@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
-import { errMsg, isMissingColumnError } from '@/lib/apiHelpers';
+import { errMsg } from '@/lib/apiHelpers';
 import { rateLimit, clientIp } from '@/lib/rateLimit';
-import { getAuthUser, isAdminUser, ownsStoreOrAdmin } from '@/lib/apiAuth';
+import { getAuthUser, isAdminUser, ownsStoreOrAdmin, requireSupplierAccess } from '@/lib/apiAuth';
 import { pingRealtime, runAfterResponse } from '@/lib/realtimeServer';
 import { sendPushToStores, sellerStoreIds } from '@/lib/pushNotify';
 import { createNotifications } from '@/lib/notify';
@@ -108,22 +108,22 @@ export async function GET(req: Request) {
   // Orders carry customer PII (names, phones, totals). Reads require auth and
   // an ownership check — otherwise anyone could enumerate supplierId/userId and
   // scrape every store's order history (IDOR).
-  const user = await getAuthUser(req);
-  if (!user) return NextResponse.json({ error: 'Unauthorized — sign in required' }, { status: 401 });
-
   const { searchParams } = new URL(req.url);
   const userId        = searchParams.get('userId');
   const supplierParam = searchParams.get('supplierId');
 
   // ── Supplier orders filter ─────────────────────────────────
+  // Checked FIRST and with its own guard: a STAFF cashier has no Supabase JWT,
+  // so requiring a signed-in user up front would lock staff out of their own
+  // store's orders ("Sign in to view orders").
   if (supplierParam !== null) {
     const supplierId = parseInt(supplierParam, 10);
     if (Number.isNaN(supplierId)) {
       return NextResponse.json({ error: 'supplierId must be a number' }, { status: 400 });
     }
-    if (!(await ownsStoreOrAdmin(user.id, supplierId))) {
-      return NextResponse.json({ error: 'Forbidden — not your store' }, { status: 403 });
-    }
+    // Owner, admin, or a STAFF cashier of this store holding 'orders'.
+    // 401 when there's no credential at all, 403 when it's the wrong store.
+    { const denied = await requireSupplierAccess(req, supplierId, 'orders'); if (denied) return denied; }
     try {
       // A store sees ONLY the orders attributed to it (orders.supplier_id,
       // stamped by checkout / POS / invoicing). We deliberately do NOT fall
@@ -142,6 +142,11 @@ export async function GET(req: Request) {
       return NextResponse.json([]);
     }
   }
+
+  // Personal order history — this branch is Supabase-user only (a cashier has
+  // no personal orders; theirs is the store branch above).
+  const user = await getAuthUser(req);
+  if (!user) return NextResponse.json({ error: 'Unauthorized — sign in required' }, { status: 401 });
 
   // A signed-in customer may read only their OWN orders; only an admin may
   // read across users (the no-userId "all orders" dump).
@@ -253,25 +258,30 @@ export async function POST(req: Request) {
       if (!error && data) {
         const created = data as Record<string, unknown>;
         // The RPC predates attribution/POS columns — stamp them after the
-        // fact (best-effort; ignored on pre-v3.7 schemas).
+        // fact. STORE ATTRIBUTION (supplier_id + cashier_name) matters most:
+        // without it the sale is invisible on the store's dashboard. session_id
+        // is the fragile field (FK to pos_sessions) — a sale rung up on a
+        // register opened OFFLINE points at a session not in the DB, so the
+        // update fails on it; we then retry keeping supplier_id + cashier_name
+        // and drop only session_id.
         if (supplierId != null || sessionId != null || cashierName != null) {
-          const extra: Record<string, unknown> = {};
-          if (supplierId  != null) extra.supplier_id  = supplierId;
-          if (sessionId   != null) extra.session_id   = sessionId;
-          if (cashierName != null) extra.cashier_name = cashierName;
-          try {
-            const { error: exErr } = await sb.from('orders').update(extra).eq('id', String(created.id));
-            if (!exErr) Object.assign(created, extra);
-            else if (extra.supplier_id != null) {
-              // Column set may be partial (e.g. no supplier_id yet) — retry
-              // with just the POS columns so a session link still lands.
-              delete extra.supplier_id;
-              if (Object.keys(extra).length) {
-                const { error: e2 } = await sb.from('orders').update(extra).eq('id', String(created.id));
-                if (!e2) Object.assign(created, extra);
-              }
-            }
-          } catch { /* attribution is best-effort */ }
+          const full: Record<string, unknown> = {};
+          if (supplierId  != null) full.supplier_id  = supplierId;
+          if (cashierName != null) full.cashier_name = cashierName;
+          if (sessionId   != null) full.session_id   = sessionId;
+          const stampAttempts = [
+            full,
+            { supplier_id: full.supplier_id, cashier_name: full.cashier_name }, // drop session_id
+            { supplier_id: full.supplier_id },                                  // drop cashier_name
+          ]
+            .map(o => Object.fromEntries(Object.entries(o).filter(([, v]) => v != null)))
+            .filter(o => Object.keys(o).length);
+          for (const upd of stampAttempts) {
+            try {
+              const { error: exErr } = await sb.from('orders').update(upd).eq('id', String(created.id));
+              if (!exErr) { Object.assign(created, upd); break; }
+            } catch { /* try the next, leaner stamp */ }
+          }
         }
         notifyNewOrder(String(created.id), userId, items, Number(created.total ?? 0));
         return NextResponse.json(mapOrder(created), { status: 201 });
@@ -364,40 +374,29 @@ export async function POST(req: Request) {
     };
     if (userId != null) basePayload.user_id = userId;
 
+    // Insert, degrading gracefully. Ordered so STORE ATTRIBUTION
+    // (supplier_id + cashier_name) is the LAST thing dropped — losing it would
+    // hide the sale from the store's dashboard. The most fragile field is
+    // session_id (FK to pos_sessions): a sale rung up on a register that was
+    // opened OFFLINE references a session not yet in the DB, so on sync the FK
+    // fails — we then keep everything except session_id.
+    const withNotes = { ...basePayload, notes };
+    const attempts: Record<string, unknown>[] = [
+      { ...withNotes, supplier_id: supplierId, cashier_name: cashierName, session_id: sessionId },
+      { ...withNotes, supplier_id: supplierId, cashier_name: cashierName },  // drop session_id (offline/FK)
+      { ...withNotes, supplier_id: supplierId },                            // drop cashier_name
+      withNotes,                                                            // drop supplier_id (pre-v3.7)
+      basePayload,                                                          // drop notes (oldest schema)
+    ];
+
     let order: Record<string, unknown> | null = null;
-    try {
-      const { data, error } = await sb
-        .from('orders')
-        .insert({ ...basePayload, notes, session_id: sessionId, cashier_name: cashierName, supplier_id: supplierId })
-        .select().single();
-      if (error) throw error;
-      order = data as Record<string, unknown>;
-    } catch (e0) {
-      if (!isMissingColumnError(e0)) throw e0;
-      try {
-        const { data, error } = await sb
-          .from('orders')
-          .insert({ ...basePayload, notes, session_id: sessionId, cashier_name: cashierName })
-          .select().single();
-        if (error) throw error;
-        order = data as Record<string, unknown>;
-      } catch (e1) {
-        if (!isMissingColumnError(e1)) throw e1;
-        // Fall back progressively for pre-migration schemas
-        try {
-          const { data, error } = await sb
-            .from('orders').insert({ ...basePayload, notes }).select().single();
-          if (error) throw error;
-          order = data as Record<string, unknown>;
-        } catch (e2) {
-          if (!isMissingColumnError(e2)) throw e2;
-          const { data, error } = await sb
-            .from('orders').insert(basePayload).select().single();
-          if (error) throw error;
-          order = data as Record<string, unknown>;
-        }
-      }
+    let lastErr: unknown = null;
+    for (let i = 0; i < attempts.length; i++) {
+      const { data, error } = await sb.from('orders').insert(attempts[i]).select().single();
+      if (!error) { order = data as Record<string, unknown>; break; }
+      lastErr = error;
     }
+    if (!order) throw lastErr ?? new Error('Order insert failed');
 
     // 4. Decrement stock (sales only) — best-effort on legacy schema
     if (!isBulk) {

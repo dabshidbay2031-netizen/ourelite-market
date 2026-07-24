@@ -55,7 +55,7 @@ export async function GET(req: Request) {
   if (Number.isNaN(supplierId)) {
     return NextResponse.json({ error: 'supplierId required' }, { status: 400 });
   }
-  const denied = await requireSupplierAccess(req, supplierId);
+  const denied = await requireSupplierAccess(req, supplierId, 'customers');
   if (denied) return denied;
 
   try {
@@ -91,7 +91,7 @@ export async function POST(req: Request) {
   if (!Number.isInteger(supplierId) || supplierId <= 0) {
     return NextResponse.json({ error: 'supplierId required' }, { status: 400 });
   }
-  const denied = await requireSupplierAccess(req, supplierId);
+  const denied = await requireSupplierAccess(req, supplierId, 'customers');
   if (denied) return denied;
 
   const customerId = String(body.customerId ?? '').trim();

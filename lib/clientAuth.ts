@@ -1,20 +1,29 @@
 'use client';
 
 import { getSupabase } from '@/lib/supabase';
+import { readCashierToken } from '@/lib/cashierSession';
 
 /**
- * Build request headers carrying the current user's Supabase JWT, so
- * server-side guards (see lib/apiAuth.ts) can authenticate the caller.
- * Merges any extra headers (e.g. Content-Type) you pass in.
+ * Build request headers that identify the caller to the server-side guards
+ * (see lib/apiAuth.ts). Two kinds of caller:
+ *   • an owner/customer  → Supabase JWT in `Authorization`
+ *   • a STAFF cashier    → signed token in `X-Cashier-Token` (cashiers are not
+ *     Supabase users, so they have no JWT)
+ * Both are sent when present; the server prefers the JWT.
  */
 export async function authHeaders(
   extra: Record<string, string> = {},
 ): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { ...extra };
+
+  const cashierToken = readCashierToken();
+  if (cashierToken) headers['X-Cashier-Token'] = cashierToken;
+
   try {
     const { data } = await getSupabase().auth.getSession();
     const token = data.session?.access_token;
-    return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
-  } catch {
-    return extra;
-  }
+    if (token) headers.Authorization = `Bearer ${token}`;
+  } catch { /* not signed in as a Supabase user */ }
+
+  return headers;
 }

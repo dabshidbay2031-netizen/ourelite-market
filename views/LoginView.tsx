@@ -19,6 +19,21 @@ export default function LoginPage() {
   /* ── Shared state ─────────────────────────────── */
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
+  const [resetSent, setResetSent] = useState(false);
+
+  /* ── Forgot password ──────────────────────────── */
+  async function handleForgotPassword() {
+    const addr = email.trim();
+    if (!addr) { setError('Enter your email above first, then tap “Forgot password”.'); return; }
+    setError(''); setLoading(true);
+    const { error: err } = await getSupabase().auth.resetPasswordForEmail(addr, {
+      redirectTo: `${window.location.origin}/auth/callback`,
+    });
+    setLoading(false);
+    // Don't reveal whether the email exists — always show the same confirmation.
+    if (err && !/rate|too many/i.test(err.message)) console.error('resetPasswordForEmail:', err);
+    setResetSent(true);
+  }
 
   /* ── Email / password ─────────────────────────── */
   async function handleEmailLogin() {
@@ -109,7 +124,22 @@ export default function LoginPage() {
                   {showPass ? '🙈' : '👁️'}
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={handleForgotPassword}
+                disabled={loading}
+                style={{ marginTop: 6, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--primary)', fontSize: '.82rem', fontWeight: 600 }}
+              >
+                Forgot password?
+              </button>
             </div>
+
+            {resetSent && (
+              <div className="card" style={{ padding: '12px 14px', borderRadius: 10, margin: '0 0 12px', fontSize: '.85rem', lineHeight: 1.5 }}>
+                📧 If an account exists for <strong>{email.trim()}</strong>, we&apos;ve sent a password-reset link. Open it on this device to set a new password.
+              </div>
+            )}
+
             <button
               className="btn btn-primary btn-full btn-lg"
               onClick={handleEmailLogin}

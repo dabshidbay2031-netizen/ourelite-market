@@ -4,14 +4,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from '@/lib/hashRouter';
 import Header from '@/components/Header';
 import ErrorState from '@/components/ErrorState';
-import { useAuth } from '@/context/AuthContext';
+import { useStoreActor } from '@/lib/useStoreActor';
 import { useApp } from '@/context/AppContext';
 import { authHeaders } from '@/lib/clientAuth';
 import { useLiveRefresh } from '@/lib/useLiveRefresh';
 import { useRealtimePing } from '@/lib/useRealtimePing';
 import OnlinePaymentsWallet from '@/components/OnlinePaymentsWallet';
 import { CATEGORIES } from '@/lib/data';
-import { isRevenueOrder } from '@/lib/revenue';
+import { isRevenueOrder, orderChannel } from '@/lib/revenue';
 import { deriveSubscription, SUBSCRIPTION_TRIAL_DAYS } from '@/lib/subscription';
 import type { Order, Product } from '@/lib/types';
 
@@ -39,9 +39,12 @@ const STATUS_COLOR: Record<string, { bg: string; color: string }> = {
 const SVG_W = 300, SVG_H = 84;
 
 export default function BusinessDashboardView() {
-  const { currentSupplier, loading: authLoading } = useAuth();
+  // Owner OR a staff cashier with the 'dashboard' privilege operating the store.
+  const actor = useStoreActor();
+  const currentSupplier = actor.store;
+  const authLoading = actor.loading;
   const { state } = useApp();
-  const supplierId = currentSupplier?.id ?? null;
+  const supplierId = actor.storeId;
   const sub = useMemo(() => deriveSubscription(currentSupplier), [currentSupplier]);
 
   /* ── This business's own products + orders ── */
@@ -129,9 +132,24 @@ export default function BusinessDashboardView() {
   [myProductIds]);
 
   /* Orders that actually contain something this business sells (revenue only) */
-  const myOrders = useMemo(
+  const allMyOrders = useMemo(
     () => realOrders.filter(o => isRevenueOrder(o) && orderRevenue(o) > 0),
     [realOrders, orderRevenue]
+  );
+
+  /* ── Sales channel: All · Online (web) · In-store (POS) ── */
+  const [channel, setChannel] = useState<'all' | 'online' | 'pos'>('all');
+  const channelCounts = useMemo(() => {
+    let online = 0, pos = 0;
+    for (const o of allMyOrders) (orderChannel(o) === 'pos' ? pos++ : online++);
+    return { all: allMyOrders.length, online, pos };
+  }, [allMyOrders]);
+
+  // Everything below (KPIs, trend, top products, category revenue, recent)
+  // derives from `myOrders`, so scoping it here re-scopes the whole dashboard.
+  const myOrders = useMemo(
+    () => channel === 'all' ? allMyOrders : allMyOrders.filter(o => orderChannel(o) === channel),
+    [allMyOrders, channel]
   );
   const hasOrders = myOrders.length > 0;
 
@@ -247,6 +265,35 @@ export default function BusinessDashboardView() {
         <Link href="/billing" className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }}>💳 Billing</Link>
       </div>
       <p className="page-subtitle">Your store&apos;s sales performance &amp; analytics</p>
+
+      {/* ── Sales channel tabs: split Online (web) vs In-store (POS) ── */}
+      <div style={{ padding: '0 16px 12px' }}>
+        <div className="dash-channel-tabs" role="tablist" aria-label="Sales channel">
+          {([
+            { key: 'all',    label: '📊 All sales',  count: channelCounts.all },
+            { key: 'online', label: '🌐 Online',     count: channelCounts.online },
+            { key: 'pos',    label: '🏬 In-store',   count: channelCounts.pos },
+          ] as const).map(t => (
+            <button
+              key={t.key}
+              role="tab"
+              aria-selected={channel === t.key}
+              className={`dash-channel-tab${channel === t.key ? ' active' : ''}`}
+              onClick={() => setChannel(t.key)}
+            >
+              <span>{t.label}</span>
+              <span className="dash-channel-count">{t.count}</span>
+            </button>
+          ))}
+        </div>
+        <p style={{ fontSize: '.76rem', color: 'var(--text-muted)', margin: '8px 2px 0' }}>
+          {channel === 'online'
+            ? 'Sales placed by customers through the web/app.'
+            : channel === 'pos'
+              ? 'Sales rung up in person at your register (POS).'
+              : 'Online and in-store sales combined.'}
+        </p>
+      </div>
 
       {/* Money-back window reminder — only while the seller can still refund. */}
       {sub.refundable && (

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
-import { requireStaff } from '@/lib/apiAuth';
+import { requireStaff, resolveStoreOwner } from '@/lib/apiAuth';
 import { hashPassword } from '@/lib/passwordHash';
 import { DEFAULT_PRIVILEGES } from '@/lib/cashierPrivileges';
 
@@ -18,9 +18,15 @@ function mapCashier(c: Record<string, unknown>) {
 }
 
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const businessId = searchParams.get('businessId');
-  if (!businessId) return NextResponse.json({ error: 'businessId required' }, { status: 400 });
+  // Staff records carry phone numbers — require auth. Managing/viewing staff is
+  // the 'staff' privilege; the list is always scoped to the CALLER'S own store
+  // (an admin may target any via ?businessId=).
+  { const denied = await requireStaff(req, 'staff'); if (denied) return denied; }
+  const acting = await resolveStoreOwner(req);
+  if (!acting) return NextResponse.json({ error: 'Forbidden — store access required' }, { status: 403 });
+
+  const requested = new URL(req.url).searchParams.get('businessId');
+  const businessId = acting.isAdmin && requested ? requested : acting.ownerUserId;
 
   const { data, error } = await getSupabaseAdmin()
     .from('cashiers')
@@ -33,22 +39,39 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  { const denied = await requireStaff(req); if (denied) return denied; }
+  // Managing staff requires the 'staff' privilege (owner/admin always have it).
+  { const denied = await requireStaff(req, 'staff'); if (denied) return denied; }
+  const acting = await resolveStoreOwner(req);
+  if (!acting) return NextResponse.json({ error: 'Forbidden — store access required' }, { status: 403 });
+
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const { businessId, name, phone, password, privileges } = body as Record<string, string>;
-  if (!businessId || !name?.trim() || !phone?.trim() || !password) {
-    return NextResponse.json({ error: 'businessId, name, phone, and password are required' }, { status: 400 });
+  const { name, phone, password, privileges } = body as Record<string, string>;
+  if (!name?.trim() || !phone?.trim() || !password) {
+    return NextResponse.json({ error: 'name, phone, and password are required' }, { status: 400 });
   }
   if (password.length < 4) {
     return NextResponse.json({ error: 'Password must be at least 4 characters' }, { status: 400 });
   }
 
+  // The store is ALWAYS the caller's own — never taken from the body, so a
+  // staff-privileged cashier can't plant a cashier in another business. Admins
+  // may target a specific store via ?businessId= would be their own tooling;
+  // here we bind to the acting store.
+  const businessId = acting.ownerUserId;
+
+  // A cashier granting privileges can't hand out powers they don't hold
+  // themselves (no privilege escalation). The owner/admin can grant anything.
+  let privArray = Array.isArray(privileges) ? privileges : DEFAULT_PRIVILEGES;
+  if (acting.isCashier && acting.privileges) {
+    const allowed = new Set(acting.privileges);
+    privArray = privArray.filter(p => allowed.has(p));
+  }
+
   const passwordHash = await hashPassword(password);
-  const privArray    = Array.isArray(privileges) ? privileges : DEFAULT_PRIVILEGES;
 
   const { data, error } = await getSupabaseAdmin()
     .from('cashiers')

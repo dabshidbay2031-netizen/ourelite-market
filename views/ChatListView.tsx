@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from '@/lib/hashRouter';
 import Header from '@/components/Header';
 import { useAuth } from '@/context/AuthContext';
+import { useStoreActor } from '@/lib/useStoreActor';
 import { useRealtimePing } from '@/lib/useRealtimePing';
 import StoreAvatar from '@/components/StoreAvatar';
 import type { ChatUser, Message } from '@/lib/types';
@@ -40,15 +41,21 @@ function lastMsgPreview(msg: ConvItem['lastMessage'], myId: string): string {
 
 export default function ChatListPage() {
   const router = useRouter();
-  const { user, loading } = useAuth();
+  const { loading } = useAuth();
+  const actor = useStoreActor();
+  // Chat threads belong to the store OWNER's account, so STAFF with the 'chat'
+  // privilege work the same inbox on their behalf.
+  const chatUserId  = actor.ownerUserId;
+  const staffBlocked = actor.isStaff && !actor.can('chat');
+
   const [convs,     setConvs]     = useState<ConvItem[]>([]);
   const [convLoading, setConvLoading] = useState(true);
 
   const loadConversations = useCallback(async () => {
-    if (!user) return;
+    if (!chatUserId || staffBlocked) { setConvLoading(false); return; }
     setConvLoading(true);
     try {
-      const res  = await fetch(`/api/conversations?userId=${user.id}`);
+      const res  = await fetch(`/api/conversations?userId=${chatUserId}`);
       const data = await res.json();
       if (!Array.isArray(data)) { setConvs([]); setConvLoading(false); return; }
 
@@ -56,7 +63,7 @@ export default function ChatListPage() {
       const enriched = await Promise.all(
         data.map(async (c: ConvItem) => {
           try {
-            const r = await fetch(`/api/conversations/${c.id}?viewerId=${user.id}`);
+            const r = await fetch(`/api/conversations/${c.id}?viewerId=${chatUserId}`);
             const d = await r.json();
             return { ...c, otherUser: d.otherUser };
           } catch { return c; }
@@ -67,15 +74,29 @@ export default function ChatListPage() {
       setConvs([]);
     }
     setConvLoading(false);
-  }, [user]);
+  }, [chatUserId, staffBlocked]);
 
   useEffect(() => { loadConversations(); }, [loadConversations]);
   // Live: an incoming message pings this user's topic → list re-sorts/unreads
   // update instantly (the open room itself streams via postgres_changes).
-  useRealtimePing([user ? `user:${user.id}` : null], loadConversations);
+  useRealtimePing([chatUserId ? `user:${chatUserId}` : null], loadConversations);
 
-  /* ── Not logged in ─── */
-  if (!loading && !user) {
+  /* ── Staff without the chat grant ─── */
+  if (staffBlocked) {
+    return (
+      <div className="page-anim">
+        <Header showSearch={false} />
+        <div className="empty-state" style={{ marginTop: 60 }}>
+          <div className="empty-icon">🔒</div>
+          <div className="empty-title">Chat isn&apos;t part of your role</div>
+          <div className="empty-sub">Ask the store owner to grant you the Chat permission.</div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ── Nobody signed in (no owner session AND no staff session) ─── */
+  if (!loading && !actor.loading && !chatUserId) {
     return (
       <div className="page-anim">
         <Header showSearch={false} />
@@ -156,7 +177,7 @@ export default function ChatListPage() {
                     <span className="chat-conv-time">{timeAgo(c.updatedAt)}</span>
                   </div>
                   <div className="chat-conv-preview">
-                    {lastMsgPreview(c.lastMessage, user!.id)}
+                    {lastMsgPreview(c.lastMessage, chatUserId!)}
                   </div>
                 </div>
 

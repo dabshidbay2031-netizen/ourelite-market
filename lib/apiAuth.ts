@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
+import { getCashierActor } from '@/lib/cashierAuth';
 
 /**
  * Server-side authorization helpers for API route handlers.
@@ -103,19 +104,50 @@ export async function requireSelf(req: Request, id: string): Promise<Response | 
 }
 
 /**
- * Gate: the caller must be an admin OR the owner (suppliers.auth_user_id) of the
- * given supplier id. Use for per-store reads/writes that must not leak across
- * tenants (e.g. GET /api/orders?supplierId= — orders carry customer PII).
+ * True when the request may act on this store. Three kinds of caller:
+ *   • platform admin
+ *   • the store OWNER (suppliers.auth_user_id)
+ *   • a STAFF cashier of that store holding `privilege` (they have no Supabase
+ *     JWT — see lib/cashierAuth), so staff can do exactly what the owner
+ *     granted them and nothing more.
  */
-export async function requireSupplierAccess(req: Request, supplierId: number): Promise<Response | null> {
+export async function canAccessStore(
+  req: Request,
+  supplierId: number,
+  privilege?: string,
+): Promise<boolean> {
   const user = await getAuthUser(req);
-  if (!user) return NextResponse.json({ error: 'Unauthorized — sign in required' }, { status: 401 });
-  const sb = getSupabaseAdmin();
-  const { data: admin } = await sb.from('admins').select('user_id').eq('user_id', user.id).maybeSingle();
-  if (admin) return null;
-  const { data: sup } = await sb.from('suppliers')
-    .select('id').eq('id', supplierId).eq('auth_user_id', user.id).maybeSingle();
-  if (sup) return null;
+  if (user) {
+    const sb = getSupabaseAdmin();
+    const { data: admin } = await sb.from('admins').select('user_id').eq('user_id', user.id).maybeSingle();
+    if (admin) return true;
+    const { data: sup } = await sb.from('suppliers')
+      .select('id').eq('id', supplierId).eq('auth_user_id', user.id).maybeSingle();
+    if (sup) return true;
+  }
+  const actor = await getCashierActor(req);
+  if (actor && actor.supplierId === supplierId) {
+    return !privilege || actor.privileges.includes(privilege);
+  }
+  return false;
+}
+
+/**
+ * Gate: the caller must be an admin, the store OWNER, or a privileged STAFF
+ * cashier of that store. Use for per-store reads/writes that must not leak
+ * across tenants (e.g. GET /api/orders?supplierId= — orders carry customer PII).
+ */
+export async function requireSupplierAccess(
+  req: Request,
+  supplierId: number,
+  privilege?: string,
+): Promise<Response | null> {
+  if (await canAccessStore(req, supplierId, privilege)) return null;
+  const user   = await getAuthUser(req);
+  const actor  = await getCashierActor(req);
+  if (!user && !actor) {
+    return NextResponse.json({ error: 'Unauthorized — sign in required' }, { status: 401 });
+  }
   return NextResponse.json({ error: 'Forbidden — not your store' }, { status: 403 });
 }
 
@@ -126,14 +158,24 @@ export async function requireSupplierAccess(req: Request, supplierId: number): P
  * store's products — this closes that. A product with no owner (supplier_id
  * null) can only be touched by an admin.
  */
-export async function requireProductOwner(req: Request, productId: number): Promise<Response | null> {
-  const user = await getAuthUser(req);
-  if (!user) return NextResponse.json({ error: 'Unauthorized — sign in required' }, { status: 401 });
+export async function requireProductOwner(req: Request, productId: number, privilege = 'inventory_edit'): Promise<Response | null> {
+  const user  = await getAuthUser(req);
+  const actor = user ? null : await getCashierActor(req);
+  if (!user && !actor) return NextResponse.json({ error: 'Unauthorized — sign in required' }, { status: 401 });
+
   const { data: prod } = await getSupabaseAdmin()
     .from('products').select('supplier_id').eq('id', productId).maybeSingle();
   if (!prod) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   const ownerId = prod.supplier_id as number | null;
-  const ok = ownerId != null ? await ownsStoreOrAdmin(user.id, ownerId) : await isAdminUser(user.id);
+
+  // STAFF cashier: only their own store's products, with the edit grant.
+  if (actor) {
+    const ok = ownerId != null && actor.supplierId === ownerId && actor.privileges.includes(privilege);
+    if (!ok) return NextResponse.json({ error: 'Forbidden — not your product' }, { status: 403 });
+    return null;
+  }
+
+  const ok = ownerId != null ? await ownsStoreOrAdmin(user!.id, ownerId) : await isAdminUser(user!.id);
   if (!ok) return NextResponse.json({ error: 'Forbidden — not your product' }, { status: 403 });
   return null;
 }
@@ -143,6 +185,41 @@ export async function ownedStoreId(userId: string): Promise<number | null> {
   const { data } = await getSupabaseAdmin()
     .from('suppliers').select('id').eq('auth_user_id', userId).maybeSingle();
   return (data?.id as number | undefined) ?? null;
+}
+
+export interface ActingStore {
+  /** The account that OWNS the store's data (suppliers.auth_user_id / cashiers.business_id). */
+  ownerUserId: string;
+  supplierId:  number | null;
+  isAdmin:     boolean;
+  isCashier:   boolean;
+  /** A cashier's granted privileges (null for owner/admin — they have all). */
+  privileges:  string[] | null;
+}
+
+/**
+ * Who is operating a store on this request — the owner, a platform admin, or a
+ * privileged cashier. Lets a route scope writes (staff management, settings…)
+ * to the caller's OWN store and cap a cashier to what they were granted.
+ * Returns null when the caller operates no store.
+ */
+export async function resolveStoreOwner(req: Request): Promise<ActingStore | null> {
+  const user = await getAuthUser(req);
+  if (user) {
+    if (await isAdminUser(user.id)) {
+      return { ownerUserId: user.id, supplierId: null, isAdmin: true, isCashier: false, privileges: null };
+    }
+    const supplierId = await ownedStoreId(user.id);
+    if (supplierId != null) {
+      return { ownerUserId: user.id, supplierId, isAdmin: false, isCashier: false, privileges: null };
+    }
+    return null;
+  }
+  const actor = await getCashierActor(req);
+  if (actor && actor.supplierId != null) {
+    return { ownerUserId: actor.ownerUserId, supplierId: actor.supplierId, isAdmin: false, isCashier: true, privileges: actor.privileges };
+  }
+  return null;
 }
 
 /**
@@ -155,15 +232,27 @@ export async function ownedStoreId(userId: string): Promise<number | null> {
  * asks first: that is how one store's customer book leaks into another's.
  */
 export async function requireCustomerOwner(req: Request, customerId: string): Promise<Response | null> {
-  const user = await getAuthUser(req);
-  if (!user) return NextResponse.json({ error: 'Unauthorized — sign in required' }, { status: 401 });
+  const user  = await getAuthUser(req);
+  const actor = user ? null : await getCashierActor(req);
+  if (!user && !actor) return NextResponse.json({ error: 'Unauthorized — sign in required' }, { status: 401 });
+
   const { data: row } = await getSupabaseAdmin()
     .from('customers').select('supplier_id').eq('id', customerId).maybeSingle();
   if (!row) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   const ownerId = row.supplier_id as number | null;
+
+  // STAFF cashier: only their own store's customers, and only with the grant.
+  if (actor) {
+    const ok = ownerId != null
+      && actor.supplierId === ownerId
+      && actor.privileges.includes('customers');
+    if (!ok) return NextResponse.json({ error: 'Forbidden — not your customer' }, { status: 403 });
+    return null;
+  }
+
   const ok = ownerId != null
-    ? await ownsStoreOrAdmin(user.id, ownerId)
-    : await isAdminUser(user.id);
+    ? await ownsStoreOrAdmin(user!.id, ownerId)
+    : await isAdminUser(user!.id);
   if (!ok) return NextResponse.json({ error: 'Forbidden — not your customer' }, { status: 403 });
   return null;
 }
@@ -174,13 +263,22 @@ export async function requireCustomerOwner(req: Request, customerId: string): Pr
  * requireStaff alone let ANY store reprice/unclaim a COMPETITOR's claimed
  * listing — this closes that.
  */
-export async function requireClaimOwner(req: Request, rowId: number): Promise<Response | null> {
-  const user = await getAuthUser(req);
-  if (!user) return NextResponse.json({ error: 'Unauthorized — sign in required' }, { status: 401 });
+export async function requireClaimOwner(req: Request, rowId: number, privilege = 'inventory_edit'): Promise<Response | null> {
+  const user  = await getAuthUser(req);
+  const actor = user ? null : await getCashierActor(req);
+  if (!user && !actor) return NextResponse.json({ error: 'Unauthorized — sign in required' }, { status: 401 });
+
   const { data: row } = await getSupabaseAdmin()
     .from('business_products').select('supplier_id').eq('id', rowId).maybeSingle();
   if (!row) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  if (!(await ownsStoreOrAdmin(user.id, row.supplier_id as number))) {
+  const ownerId = row.supplier_id as number;
+
+  if (actor) {
+    const ok = actor.supplierId === ownerId && actor.privileges.includes(privilege);
+    if (!ok) return NextResponse.json({ error: 'Forbidden — not your store' }, { status: 403 });
+    return null;
+  }
+  if (!(await ownsStoreOrAdmin(user!.id, ownerId))) {
     return NextResponse.json({ error: 'Forbidden — not your store' }, { status: 403 });
   }
   return null;
@@ -201,13 +299,24 @@ export async function requireSelfOrAdmin(req: Request, userId: string): Promise<
  * Used for catalog/inventory/coupon/customer/POS management endpoints.
  * Returns null when allowed, or a 401/403 Response.
  */
-export async function requireStaff(req: Request): Promise<Response | null> {
+export async function requireStaff(req: Request, privilege?: string): Promise<Response | null> {
   const user = await getAuthUser(req);
-  if (!user) return NextResponse.json({ error: 'Unauthorized — sign in required' }, { status: 401 });
-  const sb = getSupabaseAdmin();
-  const { data: admin } = await sb.from('admins').select('user_id').eq('user_id', user.id).maybeSingle();
-  if (admin) return null;
-  const { data: sup } = await sb.from('suppliers').select('id').eq('auth_user_id', user.id).maybeSingle();
-  if (sup) return null;
-  return NextResponse.json({ error: 'Forbidden — store access required' }, { status: 403 });
+  if (user) {
+    const sb = getSupabaseAdmin();
+    const { data: admin } = await sb.from('admins').select('user_id').eq('user_id', user.id).maybeSingle();
+    if (admin) return null;
+    const { data: sup } = await sb.from('suppliers').select('id').eq('auth_user_id', user.id).maybeSingle();
+    if (sup) return null;
+    return NextResponse.json({ error: 'Forbidden — store access required' }, { status: 403 });
+  }
+  // A STAFF cashier counts as store staff for their own store's operations.
+  const actor = await getCashierActor(req);
+  if (!actor) return NextResponse.json({ error: 'Unauthorized — sign in required' }, { status: 401 });
+  if (actor.supplierId == null) {
+    return NextResponse.json({ error: 'Forbidden — store access required' }, { status: 403 });
+  }
+  if (privilege && !actor.privileges.includes(privilege)) {
+    return NextResponse.json({ error: 'Forbidden — your account does not have that permission' }, { status: 403 });
+  }
+  return null;
 }

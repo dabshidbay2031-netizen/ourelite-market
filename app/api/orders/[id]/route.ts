@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { getAuthUser } from '@/lib/apiAuth';
+import { getCashierActor } from '@/lib/cashierAuth';
 import { pingRealtime, runAfterResponse } from '@/lib/realtimeServer';
 import { sendPushToUsers, sellerStoreIds } from '@/lib/pushNotify';
 
@@ -42,19 +43,39 @@ function notifyOrderChanged(order: Record<string, unknown>, newStatus?: string) 
  * buyer. (GET stays public so shared receipt QR codes keep resolving.)
  */
 async function requireOrderSeller(req: Request, orderId: string): Promise<Response | null> {
-  const user = await getAuthUser(req);
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const sb = getSupabaseAdmin();
+  const user = await getAuthUser(req);
 
-  const { data: admin } = await sb.from('admins').select('user_id').eq('user_id', user.id).maybeSingle();
-  if (admin) return null;
+  let supplierId: number | null = null;
 
-  const { data: sup } = await sb.from('suppliers').select('id').eq('auth_user_id', user.id).maybeSingle();
-  if (!sup) return NextResponse.json({ error: 'Forbidden — store access required' }, { status: 403 });
-  const supplierId = sup.id as number;
+  if (user) {
+    const { data: admin } = await sb.from('admins').select('user_id').eq('user_id', user.id).maybeSingle();
+    if (admin) return null;
+    const { data: sup } = await sb.from('suppliers').select('id').eq('auth_user_id', user.id).maybeSingle();
+    supplierId = (sup?.id as number | undefined) ?? null;
+  } else {
+    // STAFF cashier: no Supabase JWT. They manage their own store's orders
+    // when the owner granted them the 'orders' privilege.
+    const actor = await getCashierActor(req);
+    if (!actor) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (!actor.privileges.includes('orders')) {
+      return NextResponse.json({ error: 'Forbidden — your account cannot manage orders' }, { status: 403 });
+    }
+    supplierId = actor.supplierId;
+  }
 
-  const { data: ord } = await sb.from('orders').select('items').eq('id', orderId).maybeSingle();
+  if (supplierId == null) {
+    return NextResponse.json({ error: 'Forbidden — store access required' }, { status: 403 });
+  }
+
+  const { data: ord } = await sb.from('orders').select('items, supplier_id').eq('id', orderId).maybeSingle();
   if (!ord) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+  // Attributed order — the fastest, most accurate ownership signal.
+  if (ord.supplier_id != null) {
+    return Number(ord.supplier_id) === supplierId
+      ? null
+      : NextResponse.json({ error: 'Forbidden — you are not the seller of this order' }, { status: 403 });
+  }
   const itemIds = (Array.isArray(ord.items) ? ord.items as Array<{ id: number }> : [])
     .map(i => Number(i.id)).filter(n => Number.isInteger(n) && n > 0);
   if (itemIds.length === 0) return NextResponse.json({ error: 'Forbidden — not your order' }, { status: 403 });
@@ -107,7 +128,16 @@ function maskPhone(phone: unknown): string {
  */
 async function canSeeCustomerPII(req: Request, order: Record<string, unknown>): Promise<boolean> {
   const user = await getAuthUser(req);
-  if (!user) return false;
+  if (!user) {
+    // STAFF cashier of the selling store (with the 'orders' privilege) is a
+    // seller for this purpose — they fulfil the order, so they need the
+    // customer's name/phone just like the owner does.
+    const actor = await getCashierActor(req);
+    if (actor && actor.supplierId != null && actor.privileges.includes('orders')) {
+      return order.supplier_id != null && Number(order.supplier_id) === actor.supplierId;
+    }
+    return false;
+  }
   if (order.user_id != null && String(order.user_id) === user.id) return true;
   const sb = getSupabaseAdmin();
   const { data: admin } = await sb.from('admins').select('user_id').eq('user_id', user.id).maybeSingle();

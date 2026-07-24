@@ -24,6 +24,11 @@ export default function AuthCallbackPage() {
   const [status, setStatus] = useState('Completing sign-in…');
 
   useEffect(() => {
+    // A password-reset link lands here as `#…&type=recovery`. Capture it before
+    // the Supabase client consumes the hash, so we can route to the
+    // set-new-password screen instead of straight into the app.
+    const isRecovery = typeof window !== 'undefined' && /[#&?]type=recovery(&|$)/.test(window.location.hash);
+
     const handle = async () => {
       // Poll for the session — Supabase client auto-processes the URL
       let session = null;
@@ -36,6 +41,13 @@ export default function AuthCallbackPage() {
       if (!session) {
         setStatus('Sign-in failed. Redirecting…');
         setTimeout(() => leaveTo('/auth/login'), 2000);
+        return;
+      }
+
+      // Password recovery → let the user set a new password.
+      if (isRecovery) {
+        setStatus('Opening password reset…');
+        leaveTo('/auth/reset');
         return;
       }
 

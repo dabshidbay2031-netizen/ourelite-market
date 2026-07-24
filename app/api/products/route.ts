@@ -155,7 +155,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  { const denied = await requireStaff(req); if (denied) return denied; }
+  { const denied = await requireStaff(req, 'inventory_edit'); if (denied) return denied; }
   const body = await req.json();
   const {
     name, price, originalPrice, cost, category, subCategory, stock,

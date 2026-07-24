@@ -38,7 +38,9 @@ export async function GET(req: Request) {
 
 /** POST /api/coupons — create a coupon */
 export async function POST(req: Request) {
-  { const denied = await requireStaff(req); if (denied) return denied; }
+  // Coupons are catalog/pricing management → gated on 'inventory_edit'
+  // (there is no separate 'coupons' privilege).
+  { const denied = await requireStaff(req, 'inventory_edit'); if (denied) return denied; }
   const body = await req.json();
   const { code, type = 'percent', value, minOrder = 0, maxUses, expiresAt, supplierId } = body;
   if (!code || !value) return NextResponse.json({ error: 'code and value required' }, { status: 400 });

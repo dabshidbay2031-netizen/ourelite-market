@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { verifyPassword } from '@/lib/passwordHash';
 import { rateLimit, clientIp } from '@/lib/rateLimit';
+import { signCashierToken } from '@/lib/cashierAuth';
 
 // Uniform failure response — never reveal whether the phone exists (anti-enumeration).
 const BAD_CREDS = () => NextResponse.json({ error: 'Incorrect phone number or password' }, { status: 401 });
@@ -56,6 +57,9 @@ export async function POST(req: Request) {
         phone:      row.phone,
         privileges: row.privileges ?? [],
         loginAt:    new Date().toISOString(),
+        // Signed credential the client sends back as X-Cashier-Token so staff
+        // API calls authenticate (cashiers have no Supabase JWT).
+        token:      signCashierToken(String(row.id)),
       });
     }
   }

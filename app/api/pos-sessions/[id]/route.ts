@@ -48,7 +48,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 }
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  { const denied = await requireStaff(req); if (denied) return denied; }
+  { const denied = await requireStaff(req, 'pos'); if (denied) return denied; }
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
   const sb   = getSupabaseAdmin();

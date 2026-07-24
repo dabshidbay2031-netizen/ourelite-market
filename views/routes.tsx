@@ -51,6 +51,7 @@ export const ROUTES: RouteDef[] = [
   { pattern: '/auth/login',     component: lazy(() => import('@/views/LoginView')) },
   { pattern: '/auth/signup',    component: lazy(() => import('@/views/SignupView')) },
   { pattern: '/auth/callback',  component: lazy(() => import('@/views/AuthCallbackView')) },
+  { pattern: '/auth/reset',     component: lazy(() => import('@/views/ResetPasswordView')) },
   // Seller storefront shortcuts — must stay LAST (generic catch-alls).
   // '/:slug'            → store landing (redirects to the supplier profile)
   // '/:slug/:productId' → a product within a store, e.g. /city-care-pharmacy/123

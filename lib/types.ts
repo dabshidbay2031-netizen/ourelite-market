@@ -109,6 +109,10 @@ export interface Order {
   status:        string;
   /** The store that SOLD this order (v3.7 attribution); null on legacy orders. */
   supplierId?:   number | null;
+  /** POS register session + cashier — present ONLY on in-store (POS) sales, so
+   *  they distinguish an in-store sale from an online (web checkout) order. */
+  sessionId?:    string | null;
+  cashierName?:  string | null;
   createdAt:     string;
 }
 
@@ -166,6 +170,10 @@ export interface PosSession {
   totalOrders?:   number;
   totalRevenue?:  number;
   cashRevenue?:   number;
+  /** Register opened while OFFLINE — exists only on this device until the
+   *  connection returns. Its sales attribute by supplier + cashier, not by a
+   *  (non-existent) DB session row. */
+  local?:         boolean;
 }
 
 /** Minimal user info carried inside chat responses */

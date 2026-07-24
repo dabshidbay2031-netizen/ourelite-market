@@ -1781,6 +1781,28 @@ ul { list-style: none; }
   padding: 4px 10px; border-radius: 99px;
   display: inline-flex; align-items: center; gap: 5px;
 }
+
+/* ── Dashboard sales-channel tabs (Online / In-store) ── */
+.dash-channel-tabs {
+  display: flex; gap: 6px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 12px; padding: 4px;
+}
+.dash-channel-tab {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 9px 8px; border: none; background: none; cursor: pointer;
+  border-radius: 9px; font-size: .84rem; font-weight: 600;
+  color: var(--text-muted); transition: background .14s, color .14s;
+  white-space: nowrap;
+}
+.dash-channel-tab:hover:not(.active) { color: var(--text); }
+.dash-channel-tab.active { background: var(--surface); color: var(--primary); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.dash-channel-count {
+  font-size: .72rem; font-weight: 700; min-width: 20px; text-align: center;
+  padding: 1px 6px; border-radius: 99px;
+  background: var(--bg); color: var(--text-muted);
+}
+.dash-channel-tab.active .dash-channel-count { background: var(--primary-light, #EEF2FF); color: var(--primary); }
 .dash-live-pill::before {
   content: ''; width: 6px; height: 6px; border-radius: 50%;
   background: var(--success); animation: dashPulse 2s ease-in-out infinite;

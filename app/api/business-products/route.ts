@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
-import { requireStaff, getAuthUser, ownsStoreOrAdmin } from '@/lib/apiAuth';
+import { requireStaff, canAccessStore } from '@/lib/apiAuth';
 import { errMsg, isMissingTableError } from '@/lib/apiHelpers';
 import { pingRealtime } from '@/lib/realtimeServer';
 
@@ -90,7 +90,7 @@ export async function GET(req: Request) {
 
 /** POST /api/business-products — claim a product into a business's store */
 export async function POST(req: Request) {
-  { const denied = await requireStaff(req); if (denied) return denied; }
+  { const denied = await requireStaff(req, 'inventory_edit'); if (denied) return denied; }
   const body = await req.json();
   const { supplierId, productId, customPrice, stockQty = 0, moq = 1 } = body;
 
@@ -103,8 +103,8 @@ export async function POST(req: Request) {
 
   // A store may only claim products INTO ITS OWN inventory — otherwise any
   // business could stuff products into a rival's store by spoofing supplierId.
-  const user = await getAuthUser(req);
-  if (!user || !(await ownsStoreOrAdmin(user.id, parseInt(String(supplierId), 10)))) {
+  // Owner/admin OR a staff cashier of that store with 'inventory_edit'.
+  if (!(await canAccessStore(req, parseInt(String(supplierId), 10), 'inventory_edit'))) {
     return NextResponse.json({ error: 'Forbidden — not your store' }, { status: 403 });
   }
 
