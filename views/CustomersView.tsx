@@ -30,8 +30,6 @@ function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-const PAY_LABEL: Record<string, string> = { cash: '💵 Cash', waafi: '📱 Waafi', card: '💳 Card', sifalo: '📱 Sifalo' };
-
 const emptyForm = { name: '', phone: '', email: '', address: '', gender: '', notes: '' };
 type FormState = typeof emptyForm;
 
@@ -95,7 +93,6 @@ export default function CustomersPage() {
   /* ledger (per-customer invoices + payments) state */
   const [invoices,   setInvoices]   = useState<Invoice[]>([]);
   const [ledgerCust, setLedgerCust] = useState<Customer | null>(null);
-  const [payingInvId, setPayingInvId] = useState<string | null>(null);
   const [payAmount,  setPayAmount]  = useState('');
   const [payMethod,  setPayMethod]  = useState('cash');
   const [savingPay,  setSavingPay]  = useState(false);
@@ -334,27 +331,37 @@ export default function CustomersPage() {
     setSavingInv(false);
   }
 
-  /* ── Record a payment against an invoice ─────────── */
-  async function handleRecordPayment(inv: Invoice) {
+  /* ── Record a payment against the customer's TOTAL balance ─────────
+     One lump sum settles the account, applied to the oldest unpaid invoices
+     first — the store tracks a single running balance, not each order. */
+  async function handleRecordTotalPayment() {
     const amount = parseFloat(payAmount);
     if (!Number.isFinite(amount) || amount <= 0) { toast('Enter a valid amount', 'error'); return; }
-    if (amount > inv.balance + 0.005) { toast(`Max payment is the $${inv.balance.toFixed(2)} balance`, 'error'); return; }
+    if (amount > ledgerTotals.balance + 0.005) { toast(`Max is the $${ledgerTotals.balance.toFixed(2)} balance`, 'error'); return; }
     setSavingPay(true);
+    const unpaid = ledgerInvoices
+      .filter(v => v.balance > 0.005)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    let remaining = amount;
     try {
-      const res = await fetch(`/api/invoices/${inv.id}`, {
-        method: 'PATCH',
-        headers: await authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ payment: { amount, method: payMethod } }),
-      });
-      if (res.ok) {
-        const updated = await res.json() as Invoice;
-        setInvoices(prev => prev.map(v => v.id === inv.id ? updated : v));
-        setPayingInvId(null); setPayAmount('');
-        toast(updated.status === 'paid' ? 'Invoice fully paid ✓' : `Payment recorded — $${updated.balance.toFixed(2)} remaining`, 'success');
-      } else {
-        const err = await res.json().catch(() => null);
-        toast(err?.error ?? 'Failed to record payment', 'error');
+      for (const inv of unpaid) {
+        if (remaining <= 0.005) break;
+        const pay = Math.min(remaining, inv.balance);
+        const res = await fetch(`/api/invoices/${inv.id}`, {
+          method: 'PATCH',
+          headers: await authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ payment: { amount: pay, method: payMethod } }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => null);
+          toast(err?.error ?? 'Failed to record payment', 'error');
+          break;
+        }
+        remaining -= pay;
       }
+      await loadInvoices();
+      setPayAmount('');
+      toast(remaining <= 0.005 ? 'Payment recorded ✓' : 'Partial payment recorded', 'success');
     } catch {
       toast('Network error — payment not recorded', 'error');
     }
@@ -564,7 +571,7 @@ export default function CustomersPage() {
                   <button
                     className="btn btn-secondary btn-sm"
                     style={{ fontSize: '.75rem', padding: '6px 10px' }}
-                    onClick={() => { setLedgerCust(c); setPayingInvId(null); }}
+                    onClick={() => { setLedgerCust(c); setPayAmount(''); }}
                   >📒 Ledger</button>
                 )}
                 <button className="btn btn-ghost btn-sm crud-edit-btn" onClick={() => openEdit(c)}>✏️</button>
@@ -786,95 +793,62 @@ export default function CustomersPage() {
             </div>
             <div className="modal-body">
 
-              {/* Summary */}
-              <div className="inv-totals-box" style={{ marginBottom: 14 }}>
-                <div className="inv-total-row">
-                  <span>Total invoiced</span>
-                  <span>${ledgerTotals.invoiced.toFixed(2)}</span>
+              {/* Total owed — the store tracks one running balance per customer */}
+              <div style={{ textAlign: 'center', padding: '4px 0 14px' }}>
+                <div style={{ fontSize: '.7rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em' }}>
+                  Total owed
                 </div>
-                <div className="inv-total-row" style={{ color: '#059669' }}>
-                  <span>Total paid</span>
-                  <span>−${ledgerTotals.paid.toFixed(2)}</span>
+                <div style={{ fontSize: '2rem', fontWeight: 800, lineHeight: 1.1, color: ledgerTotals.balance > 0.005 ? '#dc2626' : '#059669' }}>
+                  ${ledgerTotals.balance.toFixed(2)}
                 </div>
-                <div className="inv-total-row final" style={ledgerTotals.balance > 0.005 ? { color: '#dc2626' } : undefined}>
-                  <span>Still owed</span>
-                  <span>${ledgerTotals.balance.toFixed(2)}</span>
+                <div style={{ fontSize: '.78rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                  ${ledgerTotals.invoiced.toFixed(2)} invoiced · ${ledgerTotals.paid.toFixed(2)} paid
                 </div>
               </div>
 
-              {ledgerInvoices.map(inv => (
-                <div key={inv.id} style={{ border: '1px solid var(--border)', borderRadius: 12, padding: '10px 12px', marginBottom: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: '.85rem' }}>{inv.id}</div>
-                      <div style={{ fontSize: '.74rem', color: 'var(--text-muted)' }}>
-                        {fmtDate(inv.createdAt)} · {inv.items.reduce((n, i) => n + i.qty, 0)} item{inv.items.reduce((n, i) => n + i.qty, 0) !== 1 ? 's' : ''}
-                      </div>
-                    </div>
-                    <span style={{
-                      fontSize: '.7rem', fontWeight: 800, padding: '2px 10px', borderRadius: 99,
-                      background: inv.status === 'paid' ? '#d1fae5' : inv.status === 'partial' ? '#fef3c7' : '#fee2e2',
-                      color:      inv.status === 'paid' ? '#059669' : inv.status === 'partial' ? '#d97706' : '#dc2626',
-                    }}>
-                      {inv.status === 'paid' ? '✓ PAID' : inv.status === 'partial' ? 'PARTIAL' : 'UNPAID'}
-                    </span>
-                  </div>
-
-                  {/* Items snapshot */}
-                  <div style={{ margin: '8px 0', fontSize: '.78rem', color: 'var(--text-muted)' }}>
-                    {inv.items.map(i => `${i.name} ×${i.qty}`).join(' · ')}
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.82rem', fontWeight: 600 }}>
-                    <span>Total ${inv.total.toFixed(2)}</span>
-                    <span style={{ color: '#059669' }}>Paid ${inv.paidTotal.toFixed(2)}</span>
-                    <span style={{ color: inv.balance > 0.005 ? '#dc2626' : '#059669' }}>Owes ${inv.balance.toFixed(2)}</span>
-                  </div>
-
-                  {/* Payment history */}
-                  {inv.payments.length > 0 && (
-                    <div style={{ marginTop: 8, borderTop: '1px dashed var(--border)', paddingTop: 6 }}>
-                      {inv.payments.map(p => (
-                        <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.75rem', color: 'var(--text-muted)', padding: '2px 0' }}>
-                          <span>{fmtDate(p.paidAt)} · {PAY_LABEL[p.method] ?? p.method}</span>
-                          <span style={{ fontWeight: 700, color: '#059669' }}>+${p.amount.toFixed(2)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Record payment */}
-                  {inv.balance > 0.005 && (
-                    payingInvId === inv.id ? (
-                      <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        <input
-                          className="form-input" type="number" min="0.01" step="0.01"
-                          placeholder={`Max $${inv.balance.toFixed(2)}`}
-                          value={payAmount} onChange={e => setPayAmount(e.target.value)}
-                          style={{ flex: '1 1 90px' }}
-                        />
-                        <select className="form-input" value={payMethod} onChange={e => setPayMethod(e.target.value)} style={{ flex: '0 0 110px' }}>
-                          <option value="cash">💵 Cash</option>
-                          <option value="waafi">📱 Waafi</option>
-                          <option value="card">💳 Card</option>
-                        </select>
-                        <button className="btn btn-primary btn-sm" disabled={savingPay} onClick={() => handleRecordPayment(inv)}>
-                          {savingPay ? '…' : 'Save'}
-                        </button>
-                        <button className="btn btn-ghost btn-sm" onClick={() => setPayingInvId(null)}>✕</button>
-                      </div>
-                    ) : (
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        style={{ marginTop: 8, width: '100%' }}
-                        onClick={() => { setPayingInvId(inv.id); setPayAmount(inv.balance.toFixed(2)); setPayMethod('cash'); }}
-                      >
-                        💰 Record payment
-                      </button>
-                    )
-                  )}
+              {/* Pay off the balance — applied to the oldest invoices first */}
+              {ledgerTotals.balance > 0.005 && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
+                  <input
+                    className="form-input" type="number" min="0.01" step="0.01"
+                    placeholder={`Amount (max $${ledgerTotals.balance.toFixed(2)})`}
+                    value={payAmount} onChange={e => setPayAmount(e.target.value)}
+                    style={{ flex: '1 1 130px' }}
+                  />
+                  <select className="form-input" value={payMethod} onChange={e => setPayMethod(e.target.value)} style={{ flex: '0 0 110px' }}>
+                    <option value="cash">💵 Cash</option>
+                    <option value="waafi">📱 Waafi</option>
+                    <option value="card">💳 Card</option>
+                  </select>
+                  <button className="btn btn-primary" disabled={savingPay || !payAmount} onClick={handleRecordTotalPayment}>
+                    {savingPay ? '…' : '💰 Record'}
+                  </button>
                 </div>
-              ))}
+              )}
+
+              {/* Simple invoice list — one line each */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {ledgerInvoices.map(inv => {
+                  const units = inv.items.reduce((n, i) => n + i.qty, 0);
+                  return (
+                    <div key={inv.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 10 }}>
+                      <div>
+                        <div style={{ fontSize: '.82rem', fontWeight: 700 }}>${inv.total.toFixed(2)}</div>
+                        <div style={{ fontSize: '.72rem', color: 'var(--text-muted)' }}>
+                          {fmtDate(inv.createdAt)} · {units} item{units !== 1 ? 's' : ''}
+                        </div>
+                      </div>
+                      <span style={{
+                        fontSize: '.7rem', fontWeight: 800, padding: '3px 10px', borderRadius: 99, whiteSpace: 'nowrap',
+                        background: inv.status === 'paid' ? '#d1fae5' : inv.status === 'partial' ? '#fef3c7' : '#fee2e2',
+                        color:      inv.status === 'paid' ? '#059669' : inv.status === 'partial' ? '#d97706' : '#dc2626',
+                      }}>
+                        {inv.status === 'paid' ? '✓ Paid' : `Owes $${inv.balance.toFixed(2)}`}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
 
             </div>
           </div>

@@ -36,6 +36,25 @@ export async function PATCH(req: Request) {
 
   const sb = getSupabaseAdmin();
   try {
+    // Guard: an agent is only owed a bounty for a store that's actually paying.
+    // The admin UI disables "Mark paid" for non-paying stores, but enforce it
+    // server-side too so the rule can't be bypassed. (Clearing paid is fine.)
+    if (body.paid === true) {
+      const { data: store, error: sErr } = await sb
+        .from('suppliers')
+        .select('subscription_paid_at, subscription_refunded_at, approval_status')
+        .eq('id', storeId)
+        .single();
+      if (sErr) throw sErr;
+      const paying = store.subscription_paid_at != null && store.subscription_refunded_at == null;
+      if (!paying) {
+        return NextResponse.json({ error: 'Store isn’t actively paying — can’t mark the bounty paid yet' }, { status: 409 });
+      }
+      if ((store.approval_status as string) !== 'approved') {
+        return NextResponse.json({ error: 'Approve the store before paying the agent' }, { status: 409 });
+      }
+    }
+
     const { data, error } = await sb
       .from('suppliers')
       .update(update)

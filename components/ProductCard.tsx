@@ -27,6 +27,10 @@ interface Props {
   storeDistrict?:   string | null;
   /** The selling store is internet-only — show "🌐 Online store" not a district. */
   storeOnlineOnly?: boolean;
+  /** The name of the store selling this product — shown on the card. */
+  storeName?:       string | null;
+  /** The selling store is admin-verified — show a ✓ next to its name. */
+  storeVerified?:   boolean;
 }
 
 /**
@@ -38,6 +42,7 @@ function ProductCard({
   product, isWishlisted, stock, onAddToCart, onToggleWishlist,
   canClaim = false, isClaimed = false, claiming = false, onClaim,
   storeDistrict = null, storeOnlineOnly = false,
+  storeName = null, storeVerified = false,
 }: Props) {
   const router  = useRouter();
   const color   = getCategoryColor(product.category);
@@ -138,6 +143,14 @@ function ProductCard({
 
       <div className="product-body">
         <div className="product-name">{product.name}</div>
+        {storeName && (
+          <div
+            style={{ fontSize: '.72rem', fontWeight: 700, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 3 }}
+          >
+            🏪 {storeName}
+            {storeVerified && <span title="Verified store" style={{ color: 'var(--primary)', flexShrink: 0 }}>✓</span>}
+          </div>
+        )}
         {storeOnlineOnly ? (
           <div
             style={{ fontSize: '.72rem', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--primary)' }}

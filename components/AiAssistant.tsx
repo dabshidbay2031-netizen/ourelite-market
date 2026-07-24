@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { usePathname } from '@/lib/hashRouter';
+import { OPEN_ASSISTANT_EVENT } from '@/lib/assistant';
 
 interface Msg { role: 'user' | 'assistant'; content: string }
 
@@ -11,8 +11,10 @@ const GREETING: Msg = {
 };
 
 /**
- * Floating public help assistant (Gemini-powered). Available app-wide; answers
- * how-to questions about using Hamar Mall. Mounted once in the root layout.
+ * Public help assistant (Gemini-powered). Available app-wide; answers how-to
+ * questions about using Hamar Mall. Mounted once in the root layout. It's opened
+ * from the nav menu (Sidebar / mobile drawer) via the OPEN_ASSISTANT_EVENT bus —
+ * there is no longer a floating in-page button.
  */
 export default function AiAssistant() {
   const [open, setOpen]       = useState(false);
@@ -20,12 +22,13 @@ export default function AiAssistant() {
   const [input, setInput]     = useState('');
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const pathname  = usePathname();
 
-  // Inside a chat room the floating button sits on top of the message send
-  // button (both bottom-right), so hide the assistant there. Chat has its own
-  // in-thread help; the assistant stays available on every other screen.
-  const inChatRoom = pathname.startsWith('/chat/');
+  // The nav menu opens the assistant by dispatching OPEN_ASSISTANT_EVENT.
+  useEffect(() => {
+    const openIt = () => setOpen(true);
+    window.addEventListener(OPEN_ASSISTANT_EVENT, openIt);
+    return () => window.removeEventListener(OPEN_ASSISTANT_EVENT, openIt);
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -55,20 +58,12 @@ export default function AiAssistant() {
     setLoading(false);
   };
 
-  if (inChatRoom) return null;
+  // No floating button anymore — the assistant only shows once opened from nav.
+  if (!open) return null;
 
   return (
     <>
-      <button
-        className="ai-fab"
-        aria-label={open ? 'Close assistant' : 'Open Hamar Mall assistant'}
-        onClick={() => setOpen(o => !o)}
-      >
-        {open ? '✕' : '🤖'}
-      </button>
-
-      {open && (
-        <div className="ai-panel" role="dialog" aria-label="Hamar Mall Assistant">
+      <div className="ai-panel" role="dialog" aria-label="Hamar Mall Assistant">
           <div className="ai-panel-head">
             <span className="ai-panel-title">🤖 Hamar Mall Assistant</span>
             <button className="ai-panel-close" aria-label="Close" onClick={() => setOpen(false)}>✕</button>
@@ -91,8 +86,7 @@ export default function AiAssistant() {
             />
             <button className="ai-send" onClick={send} disabled={loading || !input.trim()} aria-label="Send">➤</button>
           </div>
-        </div>
-      )}
+      </div>
     </>
   );
 }

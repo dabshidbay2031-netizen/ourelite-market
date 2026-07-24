@@ -50,6 +50,14 @@ export default function ExplorePage() {
     new Map(state.suppliers.map(s => [s.id, !!s.onlineOnly])),
   [state.suppliers]);
 
+  // Store name + verified flag per supplier → shown on each product card.
+  const nameBySupplier = useMemo(() =>
+    new Map(state.suppliers.map(s => [s.id, s.name])),
+  [state.suppliers]);
+  const verifiedBySupplier = useMemo(() =>
+    new Map(state.suppliers.map(s => [s.id, !!s.verified])),
+  [state.suppliers]);
+
   // Recognised Mogadishu district per store (GPS only, no free-text fallback) —
   // powers the district filter so "Hodan" matches only stores actually in Hodan.
   const recognizedDistrictBySupplier = useMemo(() =>
@@ -304,6 +312,8 @@ export default function ExplorePage() {
                 product={p}
                 storeDistrict={p.supplierId != null ? districtBySupplier.get(p.supplierId) ?? null : null}
                 storeOnlineOnly={p.supplierId != null ? onlineBySupplier.get(p.supplierId) ?? false : false}
+                storeName={p.supplierId != null ? nameBySupplier.get(p.supplierId) ?? null : null}
+                storeVerified={p.supplierId != null ? verifiedBySupplier.get(p.supplierId) ?? false : false}
                 isWishlisted={wishlistSet.has(p.id)}
                 stock={inventoryMap.get(p.id) ?? p.stock}
                 onAddToCart={addToCart}

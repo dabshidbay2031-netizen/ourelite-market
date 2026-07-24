@@ -9,6 +9,7 @@ import { useCashier } from '@/context/CashierContext';
 import { roleFor, isBusinessRoute } from '@/lib/roles';
 import { cashierCanAccess } from '@/lib/cashierPrivileges';
 import { useIsAdmin } from '@/lib/useIsAdmin';
+import { openAssistant } from '@/lib/assistant';
 
 interface HeaderProps {
   searchQuery?: string;
@@ -284,6 +285,19 @@ export default function Header({ searchQuery = '', onSearch, showSearch = true, 
               Global Dashboard
             </Link>
           )}
+
+          {/* AI help assistant — opens the chat panel (no longer a floating button) */}
+          <button
+            className="mobile-menu-link"
+            onClick={() => { setMenuOpen(false); openAssistant(); }}
+            style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="14" rx="3"/>
+              <path d="M8 20l2-2h4l2 2"/><circle cx="9" cy="11" r="1"/><circle cx="15" cy="11" r="1"/>
+            </svg>
+            AI Assistant
+          </button>
         </nav>
 
         <div className="mobile-menu-foot">

@@ -15,6 +15,7 @@ import { slugify, isValidSlug, RESERVED_SLUGS, storePath } from '@/lib/slug';
 import { useMyProductIds } from '@/lib/useMyProductIds';
 import { isRevenueOrder } from '@/lib/revenue';
 import type { Product, BusinessProduct, Supplier } from '@/lib/types';
+import ProductFormModal, { type ProductFormShape, emptyProductForm } from '@/components/ProductFormModal';
 
 /** A store a field agent has registered (GET /api/agent/stores). */
 interface AgentStoreRow {
@@ -148,19 +149,9 @@ function ReferralCard({ userId }: { userId: string }) {
 
 const BIZ_ICONS = ['🏭','🏪','🏬','🛒','🏥','💊','👗','🔧','🚗','🍎','🍕','📚','💻','🌿','💄','🏗️'];
 
-interface ProductFormData {
-  name: string; price: string; originalPrice: string;
-  category: string; subCategory: string;
-  stock: string; sku: string; description: string;
-  barcode: string; brand: string; tags: string;
-  imageUrls: string[];
-}
-
-const emptyForm: ProductFormData = {
-  name:'', price:'', originalPrice:'', category:'electronics', subCategory:'',
-  stock:'0', sku:'', description:'', barcode:'', brand:'', tags:'',
-  imageUrls: [],
-};
+/* The product add/edit form is the shared app-wide one (same as Inventory). */
+type ProductFormData = ProductFormShape;
+const emptyForm: ProductFormData = emptyProductForm;
 
 type BizTab = 'store' | 'edit' | 'analytics' | 'coupons';
 
@@ -695,10 +686,12 @@ export default function ProfilePage() {
   function openAddProduct() { setEditingProd(null); setForm(emptyForm); setShowForm(true); }
   function openEditProduct(p: Product) {
     setEditingProd(p);
+    const pc = p as Product & { cost?: number; taxMode?: 'none' | 'included' | 'excluded' };
     setForm({
       name:         p.name,
       price:        String(p.price),
       originalPrice:String(p.originalPrice),
+      cost:         pc.cost ? String(pc.cost) : '',
       category:     p.category,
       subCategory:  p.subCategory ?? '',
       stock:        String(p.stock),
@@ -708,6 +701,8 @@ export default function ProfilePage() {
       brand:        p.brand      ?? '',
       tags:         (p.tags ?? []).join(', '),
       imageUrls:    p.imageUrls  ?? [],
+      supplierId:   p.supplierId ? String(p.supplierId) : '',
+      taxMode:      pc.taxMode ?? 'none',
     });
     setShowForm(true);
   }
@@ -822,6 +817,7 @@ export default function ProfilePage() {
       name:          form.name.trim(),
       price:         form.price,
       originalPrice: form.originalPrice || form.price,
+      cost:          form.cost || '0',
       category:      form.category,
       subCategory:   form.subCategory   || null,
       stock:         form.stock,
@@ -830,10 +826,12 @@ export default function ProfilePage() {
       barcode:       form.barcode.trim() || null,
       brand:         form.brand.trim()   || null,
       tags:          form.tags ? form.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
+      taxMode:       form.taxMode,
       imageUrls:     form.imageUrls,
       // Keep legacy imageUrl in sync with first photo
       imageUrl:      form.imageUrls[0] ?? null,
-      supplierId:    currentSupplier?.id ?? null,
+      // Default to the signed-in store so the product isn't an un-editable orphan.
+      supplierId:    form.supplierId ? parseInt(form.supplierId, 10) : (currentSupplier?.id ?? null),
     };
     if (editingProd) {
       const res = await fetch(`/api/products/${editingProd.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
@@ -1944,118 +1942,30 @@ export default function ProfilePage() {
         </div>
       )}
 
-      {/* ── Product Form Modal ─────────────────────────── */}
+      {/* ── Product Form Modal — the shared app-wide product form ─── */}
       {showForm && (
-        <div className="modal-overlay" onClick={() => !savingProd && setShowForm(false)}>
-          <div className="modal-box" style={{ maxHeight:'90vh', overflowY:'auto' }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span>{editingProd ? '✏️ Edit Product' : '➕ New Product'}</span>
-              <button className="modal-close" onClick={() => setShowForm(false)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <div className="form-group">
-                <label className="form-label">Product Name *</label>
-                <input className="form-input" placeholder="e.g. iPhone 15 Pro" value={form.name} onChange={e => pf('name', e.target.value)} />
-              </div>
-
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-                <div className="form-group">
-                  <label className="form-label">Price ($) *</label>
-                  <input className="form-input" type="number" min="0" step="0.01" value={form.price} onChange={e => pf('price', e.target.value)} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Original Price ($)</label>
-                  <input className="form-input" type="number" min="0" step="0.01" value={form.originalPrice} onChange={e => pf('originalPrice', e.target.value)} />
-                </div>
-              </div>
-
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-                <div className="form-group">
-                  <label className="form-label">Category *</label>
-                  <select className="form-input" value={form.category} onChange={e => { pf('category', e.target.value); pf('subCategory', ''); }}>
-                    {CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Sub-Category</label>
-                  <select className="form-input" value={form.subCategory} onChange={e => pf('subCategory', e.target.value)}>
-                    <option value="">— Select —</option>
-                    {(SUBCATEGORIES[form.category] ?? []).map(s => (
-                      <option key={s.id} value={s.id}>{s.icon} {s.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-                <div className="form-group">
-                  <label className="form-label">Stock Qty</label>
-                  <input className="form-input" type="number" min="0" value={form.stock} onChange={e => pf('stock', e.target.value)} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">SKU</label>
-                  <input className="form-input" placeholder="MY-PRD-001" value={form.sku} onChange={e => pf('sku', e.target.value)} />
-                </div>
-              </div>
-
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-                <div className="form-group">
-                  <label className="form-label">Brand</label>
-                  <input className="form-input" placeholder="Apple, Samsung…" value={form.brand} onChange={e => pf('brand', e.target.value)} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Barcode (EAN-13)</label>
-                  <input className="form-input" placeholder="1234567890123" inputMode="numeric" maxLength={14} value={form.barcode} onChange={e => pf('barcode', e.target.value.replace(/\D/g, ''))} />
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Feature Tags <span style={{ color:'var(--text-muted)', fontWeight:400 }}>(comma-separated)</span></label>
-                <input className="form-input" placeholder="Wireless, USB-C, 5G, Waterproof" value={form.tags} onChange={e => pf('tags', e.target.value)} />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Description</label>
-                <textarea className="form-input" rows={3} style={{ resize:'vertical', fontFamily:'inherit' }}
-                  placeholder="Product details…" value={form.description} onChange={e => pf('description', e.target.value)} maxLength={500} />
-              </div>
-
-              {/* ── Product Photos ─────────────────────── */}
-              <div className="form-group">
-                <label className="form-label">
-                  Product Photos
-                  <span style={{ fontWeight:400, color:'var(--text-muted)', marginLeft:6 }}>
-                    (up to 8 · first is cover)
-                  </span>
-                </label>
-                <ProductImageUpload
-                  urls={form.imageUrls}
-                  onChange={urls => pf('imageUrls', urls)}
-                  maxPhotos={8}
-                />
-              </div>
-
-              {/* ── AI Generate button ────────────────────── */}
-              {form.imageUrls.length > 0 && (
-                <AiGenerateButton
-                  imageUrl={form.imageUrls[0]}
-                  onResult={result => {
-                    if (result.name)        pf('name',        result.name);
-                    if (result.description) pf('description', result.description);
-                    if (result.brand)       pf('brand',       result.brand);
-                    if (result.category)    pf('category',    result.category);
-                    if (result.subCategory) pf('subCategory', result.subCategory);
-                    if (result.tags?.length) pf('tags', result.tags.join(', '));
-                  }}
-                />
-              )}
-
-              <button className="btn btn-primary btn-full btn-lg" onClick={handleSaveProduct} disabled={savingProd}>
-                {savingProd ? 'Saving…' : editingProd ? 'Update Product' : 'Add Product'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ProductFormModal
+          form={form}
+          setForm={setForm}
+          saving={savingProd}
+          onSave={handleSaveProduct}
+          onClose={() => setShowForm(false)}
+          editingId={editingProd?.id ?? null}
+          suppliers={state.suppliers}
+          aiSlot={form.imageUrls.length > 0 ? (
+            <AiGenerateButton
+              imageUrl={form.imageUrls[0]}
+              onResult={result => {
+                if (result.name)        pf('name',        result.name);
+                if (result.description) pf('description', result.description);
+                if (result.brand)       pf('brand',       result.brand);
+                if (result.category)    pf('category',    result.category);
+                if (result.subCategory) pf('subCategory', result.subCategory);
+                if (result.tags?.length) pf('tags', result.tags.join(', '));
+              }}
+            />
+          ) : null}
+        />
       )}
     </div>
   );

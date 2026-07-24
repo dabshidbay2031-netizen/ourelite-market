@@ -30,6 +30,11 @@ export default function SuppliersPage() {
   // MOQ is wholesale-only information — plain customers don't see it.
   const isB2bViewer = accountType === 'business' || accountType === 'supplier';
 
+  // A "supplier" is a WHOLESALER that sells to businesses — a distinct account
+  // type from the retail businesses (and agents) that also live in the
+  // suppliers table. This page lists only true suppliers.
+  const wholesaleSuppliers = suppliers.filter(s => s.accountType === 'supplier');
+
   const [showForm, setShowForm]     = useState(false);
   const [editingId, setEditingId]   = useState<number | null>(null);
   const [form, setForm]             = useState<SupplierForm>(emptyForm);
@@ -66,6 +71,9 @@ export default function SuppliersPage() {
       description: form.description.trim(), categories: form.categories,
       discount: form.discount, deliveryDays: form.deliveryDays,
       minOrder: form.minOrder, badge: form.badge.trim(), verified: form.verified,
+      // New entries from this page are wholesale suppliers, not retail
+      // businesses. (account_type is create-only; the [id] PATCH ignores it.)
+      ...(editingId ? {} : { accountType: 'supplier' }),
     };
     const url    = editingId ? `/api/suppliers/${editingId}` : '/api/suppliers';
     const method = editingId ? 'PATCH' : 'POST';
@@ -98,7 +106,7 @@ export default function SuppliersPage() {
         <span className="page-title">🚚 Suppliers</span>
         <button className="btn btn-primary btn-sm" onClick={openAdd}>+ Add Supplier</button>
       </div>
-      <p className="page-subtitle">{suppliers.length} verified partners</p>
+      <p className="page-subtitle">{wholesaleSuppliers.length} wholesale supplier{wholesaleSuppliers.length !== 1 ? 's' : ''}</p>
 
       <div className="supplier-list">
         {loading ? (
@@ -114,14 +122,14 @@ export default function SuppliersPage() {
               <div style={{ height: 60, background: 'var(--border-light)' }} />
             </div>
           ))
-        ) : suppliers.length === 0 ? (
+        ) : wholesaleSuppliers.length === 0 ? (
           <div className="empty-state">
             <div className="empty-icon">🚚</div>
             <div className="empty-title">No suppliers yet</div>
             <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={openAdd}>Add First Supplier</button>
           </div>
         ) : (
-          suppliers.map(supplier => {
+          wholesaleSuppliers.map(supplier => {
             const supplierProducts = products.filter(p => supplier.productIds.includes(p.id));
             return (
               <div key={supplier.id} className="supplier-card">

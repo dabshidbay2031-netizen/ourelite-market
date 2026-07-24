@@ -33,7 +33,8 @@ function readPosSettings(): PosSettings {
   }
 }
 
-const Receipt = dynamic(() => import('@/components/Receipt'), { ssr: false });
+const Receipt        = dynamic(() => import('@/components/Receipt'), { ssr: false });
+const BarcodeScanner = dynamic(() => import('@/components/BarcodeScanner'), { ssr: false });
 
 /* ── Park/hold types ─────────────────────────────────────────── */
 interface ParkedCart {
@@ -138,6 +139,9 @@ export default function POSPage() {
   /* ── Product filter ──────────────────────────────────────────── */
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
+
+  /* ── Barcode scan-to-add ─────────────────────────────────────── */
+  const [scanOpen, setScanOpen] = useState(false);
 
   /* ── Session timer ───────────────────────────────────────────── */
   const [now, setNow] = useState(Date.now());
@@ -344,6 +348,29 @@ export default function POSPage() {
       prev.map(i => i.id === productId ? { ...i, qty: Math.max(0, i.qty + delta) } : i)
           .filter(i => i.qty > 0)
     );
+  }
+
+  // Scan a barcode → if the product is registered to THIS store, drop it
+  // straight into the cart. Matches barcode first, then SKU as a fallback.
+  function handleScan(code: string) {
+    const bc = code.trim();
+    if (!bc) return;
+    const storeProducts = myScoped ? products.filter(p => myIds.has(p.id)) : products;
+    const match = storeProducts.find(p =>
+      ((p as typeof p & { barcode?: string }).barcode ?? '') === bc || p.sku === bc
+    );
+    if (match) {
+      addToPos(match.id);
+      toast(`Added ${match.name}`, 'success');
+      return;
+    }
+    // Known product, but not one this store sells.
+    const elsewhere = products.find(p => ((p as typeof p & { barcode?: string }).barcode ?? '') === bc);
+    if (elsewhere) {
+      toast(`${elsewhere.name} isn’t in your store yet`, 'warning');
+      return;
+    }
+    toast('No product matches that barcode', 'error');
   }
 
   /* ── Park / hold handlers ────────────────────────────────────── */
@@ -671,9 +698,13 @@ export default function POSPage() {
         )}
       </div>
 
-      <div className="pos-search-bar">
-        <input className="pos-search-input" placeholder="Search by name, SKU or barcode…"
+      <div className="pos-search-bar" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input className="pos-search-input" style={{ flex: 1 }} placeholder="Search by name, SKU or barcode…"
           value={search} onChange={e => setSearch(e.target.value)} />
+        <button className="btn btn-secondary btn-sm" style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+          onClick={() => setScanOpen(true)} title="Scan a barcode to add to the sale">
+          📷 Scan
+        </button>
       </div>
 
       <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
@@ -983,6 +1014,15 @@ export default function POSPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Scan-to-add barcode scanner ── */}
+      {scanOpen && (
+        <BarcodeScanner
+          title="Scan to add to sale"
+          onDetected={code => handleScan(code)}
+          onClose={() => setScanOpen(false)}
+        />
       )}
     </div>
   );

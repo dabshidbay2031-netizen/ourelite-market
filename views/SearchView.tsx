@@ -243,6 +243,14 @@ function SearchInner() {
     new Map(state.suppliers.map(s => [s.id, !!s.onlineOnly])),
   [state.suppliers]);
 
+  // Store name + verified flag per supplier → shown on each product card + offer row.
+  const nameBySupplier = useMemo(() =>
+    new Map(state.suppliers.map(s => [s.id, s.name])),
+  [state.suppliers]);
+  const verifiedBySupplier = useMemo(() =>
+    new Map(state.suppliers.map(s => [s.id, !!s.verified])),
+  [state.suppliers]);
+
   // Recognised district per store (GPS only) → powers the district filter.
   const recognizedDistrictBySupplier = useMemo(() =>
     new Map(state.suppliers.map(s => [s.id, districtFor(s.latitude, s.longitude)])),
@@ -605,6 +613,12 @@ function SearchInner() {
                     <StoreAvatar value={o.store.icon} alt={o.store.name} />
                   </span>
                   <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.store.name}</span>
+                  {verifiedBySupplier.get(o.store.id) && (
+                    <span title="Verified store" style={{ color: 'var(--primary, #4F46E5)', flexShrink: 0 }}>✓</span>
+                  )}
+                  {o.claimed && (
+                    <span style={{ flexShrink: 0, fontSize: '.64rem', fontWeight: 800, color: 'var(--primary, #4F46E5)', background: 'var(--primary-light, #eef2ff)', padding: '1px 6px', borderRadius: 99 }}>copy</span>
+                  )}
                   {o.store.location && (
                     <span style={{ flexShrink: 0 }}>· {o.store.location}</span>
                   )}
@@ -666,6 +680,8 @@ function SearchInner() {
                 product={p}
                 storeDistrict={p.supplierId != null ? districtBySupplier.get(p.supplierId) ?? null : null}
                 storeOnlineOnly={p.supplierId != null ? onlineBySupplier.get(p.supplierId) ?? false : false}
+                storeName={p.supplierId != null ? nameBySupplier.get(p.supplierId) ?? null : null}
+                storeVerified={p.supplierId != null ? verifiedBySupplier.get(p.supplierId) ?? false : false}
                 isWishlisted={wishlistSet.has(p.id)}
                 stock={inventoryMap.get(p.id) ?? p.stock}
                 onAddToCart={addToCart}

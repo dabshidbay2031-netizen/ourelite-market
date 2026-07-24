@@ -8,6 +8,7 @@ import { Link } from '@/lib/hashRouter';
 import { authHeaders } from '@/lib/clientAuth';
 import { getSupabase } from '@/lib/supabase';
 import ProductImage from '@/components/ProductImage';
+import StoreAvatar from '@/components/StoreAvatar';
 import type { HeroBanner } from '@/app/api/settings/hero/route';
 
 /* ── Types ──────────────────────────────────────────────────────────── */
@@ -219,6 +220,11 @@ export default function AdminDashboard() {
 
   useEffect(() => { if (role) load(tab); }, [tab, role, load]);
 
+  // Per-store bounty input buffer. Must live here with the other hooks —
+  // above the guard early-returns below — so it runs on every render (React
+  // requires a stable, unconditional hook order).
+  const [bountyDraft, setBountyDraft] = useState<Record<number, string>>({});
+
   /* ── Guards ────────────────────────────────────────────────────── */
   if (checking) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'80vh', flexDirection:'column', gap:12 }}>
@@ -311,7 +317,6 @@ export default function AdminDashboard() {
     if (res.ok) { toast(patch.paid === true ? 'Marked paid ✓' : patch.paid === false ? 'Marked unpaid' : 'Bounty saved ✓', 'success'); load('businesses'); }
     else        { toast(d.error ?? 'Failed', 'error'); }
   };
-  const [bountyDraft, setBountyDraft] = useState<Record<number, string>>({});
 
   /* ── Product edit ──────────────────────────────────────────────── */
   const saveProd = async () => {
@@ -558,7 +563,9 @@ export default function AdminDashboard() {
                           <tr key={b.id}>
                             <td style={td}>
                               <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                                <span style={{ fontSize:20 }}>{b.icon}</span>
+                                <span style={{ width:32, height:32, flexShrink:0, borderRadius:8, overflow:'hidden', display:'grid', placeItems:'center', fontSize:20, background:'var(--bg)', border:'1px solid var(--border)' }}>
+                                  <StoreAvatar value={b.icon} />
+                                </span>
                                 <div>
                                   <div style={{ fontWeight:600 }}>{b.name}</div>
                                   {b.bio && <div style={{ fontSize:'.72rem', color:'var(--text-muted)' }}>{b.bio.slice(0,40)}{b.bio.length>40?'…':''}</div>}
