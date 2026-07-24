@@ -4,8 +4,8 @@
  *  - reviews/[id] DELETE had NO auth → anyone could delete anyone's reviews
  *  - verification-requests PATCH had NO auth → anyone could self-approve and
  *    set suppliers.verified (trust-badge escalation); POST/GET were open too
- *  - agent/stats GET had NO auth → anyone could scrape an agent's commission
- *    figures by enumerating agentId
+ *  - agent/stores GET had NO auth → anyone could scrape an agent's registered
+ *    stores + earnings by enumerating agentId
  * Every one must reject an anonymous (no-JWT) caller with 401.
  */
 import { describe, it, expect, vi } from 'vitest';
@@ -27,7 +27,7 @@ vi.mock('@/lib/supabase', () => ({
 
 import { DELETE as reviewsDelete } from '@/app/api/reviews/[id]/route';
 import { PATCH as verifPatch, POST as verifPost, GET as verifGet } from '@/app/api/verification-requests/route';
-import { GET as agentStatsGet } from '@/app/api/agent/stats/route';
+import { GET as agentStoresGet } from '@/app/api/agent/stores/route';
 
 const anon = (url = 'http://t/x', init: RequestInit = {}) => new Request(url, init);
 const params = (id: string) => ({ params: Promise.resolve({ id }) });
@@ -51,7 +51,7 @@ describe('anonymous callers are rejected (401) on the newly-gated routes', () =>
     expect((await verifGet(anon('http://t/api/verification-requests?supplierId=31'))).status).toBe(401);
   });
 
-  it('agent/stats GET → 401', async () => {
-    expect((await agentStatsGet(anon('http://t/api/agent/stats?agentId=11'))).status).toBe(401);
+  it('agent/stores GET → 401', async () => {
+    expect((await agentStoresGet(anon('http://t/api/agent/stores?agentId=11'))).status).toBe(401);
   });
 });

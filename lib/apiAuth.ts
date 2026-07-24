@@ -88,6 +88,46 @@ export async function ownsStoreOrAdmin(userId: string, supplierId: number): Prom
   return !!sup && String(sup.auth_user_id) === userId;
 }
 
+/** This user's OWN field-agent store id (account_type='agent'), or null. */
+export async function agentSupplierIdFor(userId: string): Promise<number | null> {
+  try {
+    const { data } = await getSupabaseAdmin()
+      .from('suppliers').select('id, account_type')
+      .eq('auth_user_id', userId).maybeSingle();
+    if (data && (data.account_type as string) === 'agent') return data.id as number;
+  } catch { /* account_type column may be absent on a very old schema */ }
+  return null;
+}
+
+/**
+ * True when `userId` is the FIELD AGENT who onboarded store `storeId` AND that
+ * store is still being set up (approval_status trial/pending). This is the ONLY
+ * window an agent may edit a store they don't own: once an admin approves (or
+ * rejects) the store, the agent instantly loses access and the owner takes over.
+ * Self-registered stores (registered_by_agent_id NULL) never match.
+ */
+export async function agentManagesStore(userId: string, storeId: number): Promise<boolean> {
+  const agentId = await agentSupplierIdFor(userId);
+  if (agentId == null) return false;
+  try {
+    const { data } = await getSupabaseAdmin()
+      .from('suppliers').select('registered_by_agent_id, approval_status')
+      .eq('id', storeId).maybeSingle();
+    if (!data) return false;
+    const registrar = data.registered_by_agent_id as number | null;
+    const status    = (data.approval_status as string | null) ?? null;
+    return registrar === agentId && (status === 'trial' || status === 'pending' || status === null);
+  } catch {
+    // registered_by_agent_id column absent (migration_v3_9 not run) → feature off
+    return false;
+  }
+}
+
+/** Owns the store (or admin) OR is the field agent currently setting it up. */
+export async function ownsOrManagesStore(userId: string, supplierId: number): Promise<boolean> {
+  return (await ownsStoreOrAdmin(userId, supplierId)) || (await agentManagesStore(userId, supplierId));
+}
+
 /** Gate: any signed-in user. Returns the user id, or a 401 Response. */
 export async function requireUser(req: Request): Promise<string | Response> {
   const user = await getAuthUser(req);
@@ -124,6 +164,9 @@ export async function canAccessStore(
     const { data: sup } = await sb.from('suppliers')
       .select('id').eq('id', supplierId).eq('auth_user_id', user.id).maybeSingle();
     if (sup) return true;
+    // A field agent may fully set up a store they onboarded while it's still in
+    // review (any privilege), and nothing after it's approved.
+    if (await agentManagesStore(user.id, supplierId)) return true;
   }
   const actor = await getCashierActor(req);
   if (actor && actor.supplierId === supplierId) {
@@ -175,7 +218,7 @@ export async function requireProductOwner(req: Request, productId: number, privi
     return null;
   }
 
-  const ok = ownerId != null ? await ownsStoreOrAdmin(user!.id, ownerId) : await isAdminUser(user!.id);
+  const ok = ownerId != null ? await ownsOrManagesStore(user!.id, ownerId) : await isAdminUser(user!.id);
   if (!ok) return NextResponse.json({ error: 'Forbidden — not your product' }, { status: 403 });
   return null;
 }
@@ -278,7 +321,7 @@ export async function requireClaimOwner(req: Request, rowId: number, privilege =
     if (!ok) return NextResponse.json({ error: 'Forbidden — not your store' }, { status: 403 });
     return null;
   }
-  if (!(await ownsStoreOrAdmin(user!.id, ownerId))) {
+  if (!(await ownsOrManagesStore(user!.id, ownerId))) {
     return NextResponse.json({ error: 'Forbidden — not your store' }, { status: 403 });
   }
   return null;

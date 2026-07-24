@@ -11,22 +11,27 @@ import { CATEGORIES, SUBCATEGORIES } from '@/lib/data';
 import { authHeaders } from '@/lib/clientAuth';
 import { mapsDirectionsUrl } from '@/lib/maps';
 import StoreAvatar, { isLogoUrl } from '@/components/StoreAvatar';
-import { computeCommission, tierProgress } from '@/lib/agentCommission';
 import { slugify, isValidSlug, RESERVED_SLUGS, storePath } from '@/lib/slug';
 import { useMyProductIds } from '@/lib/useMyProductIds';
 import { isRevenueOrder } from '@/lib/revenue';
-import type { Product, BusinessProduct } from '@/lib/types';
+import type { Product, BusinessProduct, Supplier } from '@/lib/types';
 
-/** Shape returned by GET /api/agent/stats */
-interface AgentStats {
-  productsRegistered: number;
-  inStock:    number;
-  totalUnits: number;
-  everSold:   number;
-  unitsSold:  number;
-  soldRevenue: number;
-  storesReached: number;
-  stores: { id: number; name: string; icon: string; productCount: number }[];
+/** A store a field agent has registered (GET /api/agent/stores). */
+interface AgentStoreRow {
+  id:             number;
+  name:           string;
+  icon:           string;
+  slug:           string | null;
+  approvalStatus: string | null;
+  submittedAt:    string | null;
+  bountyAmount:   number | null;
+  bountyPaidAt:   string | null;
+  storePaying:    boolean;
+  createdAt:      string | null;
+}
+interface AgentTotals {
+  registered: number; approved: number; pending: number;
+  paidEarnings: number; pendingEarnings: number;
 }
 
 /* ── Heavy client-only components — loaded after hydration ─── */
@@ -170,7 +175,8 @@ interface VerifRequest { id: number; status: string; message: string | null; cre
 export default function ProfilePage() {
   const router  = useRouter();
   const { user, currentSupplier, currentProfile, accountType, loading,
-          signOut, refreshAccount, updateProfile } = useAuth();
+          signOut, refreshAccount, updateProfile,
+          actingStore, setActingStore, agentSelf } = useAuth();
   const { state, toast, reloadProducts } = useApp();
 
   // Grace period: wait a little extra after auth says "loading=false, user=null"
@@ -213,8 +219,13 @@ export default function ProfilePage() {
   const [savingBiz,    setSavingBiz]    = useState(false);
   const [savedBiz,     setSavedBiz]     = useState(false);
 
-  /* ── Field-agent commission/lead stats ─────────────────── */
-  const [agentStats, setAgentStats] = useState<AgentStats | null>(null);
+  /* ── Field-agent: stores this agent registered + earnings ─── */
+  const [agentStores, setAgentStores] = useState<AgentStoreRow[]>([]);
+  const [agentTotals, setAgentTotals] = useState<AgentTotals | null>(null);
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [linkCode,    setLinkCode]    = useState('');
+  const [linking,     setLinking]     = useState(false);
+  const [submittingStore, setSubmittingStore] = useState<number | null>(null);
 
   /* ── Business product management ────────────────────────── */
   const [bizProducts,  setBizProducts]  = useState<BusinessProduct[]>([]);
@@ -372,18 +383,75 @@ export default function ProfilePage() {
     [state.products, currentSupplier]
   );
 
-  /* Agent: pull registry + lead/commission stats (stores reached needs a
-     reverse join the client can't do, so it's computed server-side). Re-fetch
-     when the agent's own product count changes (e.g. after registering one). */
+  /* Agent: load the stores this agent has registered (status + bounty). The
+     agent's OWN store id is `agentSelf` (currentSupplier is overridden to the
+     store being set up while acting). */
+  const loadAgentStores = useCallback(async () => {
+    const agentId = agentSelf?.id;
+    if (accountType !== 'agent' || !agentId) return;
+    setAgentLoading(true);
+    try {
+      const r = await fetch(`/api/agent/stores?agentId=${agentId}`, { cache: 'no-store', headers: await authHeaders() });
+      const d = await r.json();
+      if (!d.error) { setAgentStores(d.stores ?? []); setAgentTotals(d.totals ?? null); }
+    } catch { /* keep last good */ }
+    finally { setAgentLoading(false); }
+  }, [accountType, agentSelf?.id]);
+
   useEffect(() => {
-    if (accountType !== 'agent' || !currentSupplier) { setAgentStats(null); return; }
-    let cancelled = false;
-    fetch(`/api/agent/stats?agentId=${currentSupplier.id}`)
-      .then(r => r.json())
-      .then(d => { if (!cancelled && d && !d.error) setAgentStats(d as AgentStats); })
-      .catch(() => { /* keep last good / null */ });
-    return () => { cancelled = true; };
-  }, [accountType, currentSupplier, supplierProducts.length]);
+    if (accountType === 'agent' && !actingStore) loadAgentStores();
+  }, [accountType, actingStore, loadAgentStores]);
+
+  /* Agent links a store the owner created, using the store's link code. */
+  async function handleLinkStore() {
+    const code = linkCode.trim().toUpperCase();
+    if (!code) { toast('Enter the store’s link code', 'warning'); return; }
+    setLinking(true);
+    try {
+      const r = await fetch('/api/agent/link', {
+        method: 'POST',
+        headers: await authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ code }),
+      });
+      const d = await r.json();
+      if (!r.ok) { toast(d.error ?? 'Could not register that store', 'error'); return; }
+      toast(d.alreadyLinked ? `Already yours: ${d.name}` : `Registered ${d.name} 🎉`, 'success');
+      setLinkCode('');
+      await loadAgentStores();
+    } catch { toast('Network error', 'error'); }
+    finally { setLinking(false); }
+  }
+
+  /* Agent submits a store they've finished setting up for admin review. */
+  async function handleSubmitStore(storeId: number) {
+    setSubmittingStore(storeId);
+    try {
+      const r = await fetch('/api/agent/submit', {
+        method: 'POST',
+        headers: await authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ storeId }),
+      });
+      const d = await r.json();
+      if (!r.ok) { toast(d.error ?? 'Could not submit', 'error'); return; }
+      toast('Submitted for review ✅', 'success');
+      if (actingStore?.id === storeId) setActingStore(null);
+      await loadAgentStores();
+    } catch { toast('Network error', 'error'); }
+    finally { setSubmittingStore(null); }
+  }
+
+  /* Enter "acting as" mode: fetch the fresh store row and set it up in the full
+     business UI (the server authorizes every write via agentManagesStore). */
+  async function handleSetUpStore(storeId: number) {
+    try {
+      const r = await fetch(`/api/suppliers/${storeId}`, { cache: 'no-store', headers: await authHeaders() });
+      const store = await r.json();
+      if (!r.ok || !store?.id) { toast('Could not open that store', 'error'); return; }
+      setActingStore(store as Supplier);
+      setBizTab('store');
+      window.scrollTo({ top: 0 });
+    } catch { toast('Network error', 'error'); }
+  }
   const filteredBP = useMemo(() => {
     if (!bpSearch.trim()) return bizProducts;
     const q = bpSearch.toLowerCase();
@@ -840,281 +908,108 @@ export default function ProfilePage() {
   /* ══════════════════════════════════════════════════════════════
      AGENT (FIELD AGENT / PRODUCT REGISTRAR) PROFILE
   ══════════════════════════════════════════════════════════════ */
-  if (accountType === 'agent' && currentSupplier) {
-    // Prefer server stats (they include stores-reached); fall back to the
-    // catalog already in memory so the page renders instantly before the fetch.
-    const registered = agentStats?.productsRegistered ?? supplierProducts.length;
-    const totalUnits = agentStats?.totalUnits ?? supplierProducts.reduce((s, p) => s + p.stock, 0);
-    const inStock    = agentStats?.inStock ?? supplierProducts.filter(p => p.stock > 0).length;
-    const storesReached = agentStats?.storesReached ?? 0;
-    const unitsSold  = agentStats?.unitsSold ?? supplierProducts.reduce((s, p) => s + (p.sold ?? 0), 0);
-
-    const commission = computeCommission({ productsRegistered: registered, storesReached });
-    const progress   = tierProgress(registered);
-
+  if (accountType === 'agent' && agentSelf) {
+    const badge = (s: AgentStoreRow) => {
+      if (s.approvalStatus === 'approved') return { t: 'Approved · handed over', c: 'var(--success)' };
+      if (s.approvalStatus === 'pending')  return { t: 'Under review', c: 'var(--warning)' };
+      return { t: 'Setting up', c: 'var(--primary)' };
+    };
     return (
       <div className="page-anim">
         <Header showSearch={false} />
 
-        {/* ── Agent Hero ─────────────────────────────────────────── */}
+        {/* ── Agent hero ─────────────────────────────────────────── */}
         <div className="biz-hero-card">
           <div className="biz-hero-top">
             <div className="biz-hero-icon">📋</div>
             <div className="biz-hero-info">
-              <div className="biz-hero-name">{currentSupplier.name}</div>
+              <div className="biz-hero-name">{agentSelf.name}</div>
               <div className="biz-hero-sub">{user.email ?? user.phoneNumber ?? ''}</div>
-              <div className="biz-hero-location" style={{ color: 'var(--primary)', fontSize: '.8rem', fontWeight: 600 }}>Field Agent · Product Registrar</div>
+              <div className="biz-hero-location" style={{ color:'var(--primary)', fontSize:'.8rem', fontWeight:600 }}>Field Agent · Store Acquisition</div>
             </div>
-            <button className="btn btn-ghost btn-sm signout-btn" style={{ alignSelf:'flex-start', flexShrink:0 }} onClick={handleSignOut}>
-              Sign Out
-            </button>
+            <button className="btn btn-ghost btn-sm signout-btn" style={{ alignSelf:'flex-start', flexShrink:0 }} onClick={handleSignOut}>Sign Out</button>
           </div>
 
-          {/* Stats */}
           <div className="biz-stats-row">
-            <div className="biz-stat">
-              <div className="biz-stat-val">{registered}</div>
-              <div className="biz-stat-lbl">Registered</div>
-            </div>
-            <div className="biz-stat">
-              <div className="biz-stat-val">{storesReached}</div>
-              <div className="biz-stat-lbl">Stores Reached</div>
-            </div>
-            <div className="biz-stat">
-              <div className="biz-stat-val">{inStock}</div>
-              <div className="biz-stat-lbl">In Stock</div>
-            </div>
-            <div className="biz-stat">
-              <div className="biz-stat-val">{unitsSold.toLocaleString()}</div>
-              <div className="biz-stat-lbl">Units Sold</div>
-            </div>
+            <div className="biz-stat"><div className="biz-stat-val">{agentTotals?.registered ?? agentStores.length}</div><div className="biz-stat-lbl">Registered</div></div>
+            <div className="biz-stat"><div className="biz-stat-val">{agentTotals?.approved ?? 0}</div><div className="biz-stat-lbl">Approved</div></div>
+            <div className="biz-stat"><div className="biz-stat-val">${(agentTotals?.paidEarnings ?? 0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div><div className="biz-stat-lbl">Paid</div></div>
+            <div className="biz-stat"><div className="biz-stat-val">${(agentTotals?.pendingEarnings ?? 0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div><div className="biz-stat-lbl">Owed</div></div>
           </div>
         </div>
 
-        {/* ── Commission / Lead-gen earnings ─────────────────────── */}
-        <div className="agent-earn-card">
-          <div className="agent-earn-top">
-            <div>
-              <div className="agent-earn-label">💰 Commission earned</div>
-              <div className="agent-earn-total">${commission.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+        {/* ── Register a store by link code ──────────────────────── */}
+        <div style={{ padding:'0 16px' }}>
+          <div className="card" style={{ padding:16, borderRadius:14 }}>
+            <div style={{ fontWeight:700, fontSize:'.95rem', marginBottom:6 }}>➕ Register a store</div>
+            <div style={{ fontSize:'.82rem', color:'var(--text-muted)', marginBottom:12, lineHeight:1.5 }}>
+              Have the store owner create their own account, then share their <strong>link code</strong> (shown in their profile). Enter it here to register the store — you can then set up its profile and products until it&apos;s approved.
             </div>
-            <div className="agent-tier-badge">{progress.current.emoji} {progress.current.name}</div>
-          </div>
-
-          {/* Tier progress */}
-          <div className="agent-tier-bar-track">
-            <div className="agent-tier-bar-fill" style={{ width: `${progress.pct}%` }} />
-          </div>
-          <div className="agent-tier-hint">
-            {progress.next
-              ? <>Register <strong>{progress.toNext}</strong> more to reach {progress.next.emoji} {progress.next.name} (+${progress.next.bonus} bonus)</>
-              : <>Top tier reached — maximum bonuses unlocked 🎉</>}
-          </div>
-
-          {/* Breakdown */}
-          <div className="agent-earn-breakdown">
-            <div><span>Registrations</span><strong>${commission.registration.toLocaleString()}</strong></div>
-            <div><span>Store adoption</span><strong>${commission.adoption.toLocaleString()}</strong></div>
-            <div><span>Milestone bonuses</span><strong>${commission.milestone.toLocaleString()}</strong></div>
-          </div>
-        </div>
-
-        {/* ── Stores stocking the agent's products ───────────────── */}
-        {agentStats && agentStats.stores.length > 0 && (
-          <div style={{ padding: '0 16px' }}>
-            <div style={{ fontWeight: 700, fontSize: '.95rem', padding: '4px 0 10px' }}>
-              🏪 Stores stocking your products ({agentStats.storesReached})
-            </div>
-            <div className="agent-store-list">
-              {agentStats.stores.map(s => (
-                <div key={s.id} className="agent-store-item">
-                  <div className="agent-store-avatar"><StoreAvatar value={s.icon} /></div>
-                  <div className="agent-store-name">{s.name}</div>
-                  <div className="agent-store-count">{s.productCount} {s.productCount === 1 ? 'product' : 'products'}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* ── Registry ─────────────────────────────────────────────── */}
-        <div style={{ padding: '0 16px 120px' }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 0 12px' }}>
-            <div style={{ fontWeight:700, fontSize:'.95rem' }}>📦 My Registry ({supplierProducts.length})</div>
-            <button className="btn btn-primary btn-sm" onClick={openAddProduct}>+ Register Product</button>
-          </div>
-
-          {supplierProducts.length === 0 && !bpLoading ? (
-            <div className="empty-state" style={{ marginTop: 40 }}>
-              <div className="empty-icon">📋</div>
-              <div className="empty-title">No products registered yet</div>
-              <div className="empty-sub">Tap "Register Product" to add products to the catalog.</div>
-              <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={openAddProduct}>
-                Register First Product
+            <div style={{ display:'flex', gap:8 }}>
+              <input className="form-input" placeholder="e.g. 3F9A2C7B" value={linkCode}
+                onChange={e => setLinkCode(e.target.value.toUpperCase())}
+                onKeyDown={e => e.key === 'Enter' && handleLinkStore()}
+                style={{ textTransform:'uppercase', letterSpacing:'.06em', fontFamily:'monospace' }} maxLength={12} />
+              <button className="btn btn-primary" onClick={handleLinkStore} disabled={linking || !linkCode.trim()}>
+                {linking ? '…' : 'Register'}
               </button>
             </div>
+          </div>
+        </div>
+
+        {/* ── My registered stores ───────────────────────────────── */}
+        <div style={{ padding:'16px 16px 120px' }}>
+          <div style={{ fontWeight:700, fontSize:'.95rem', padding:'4px 0 10px' }}>🏪 My stores ({agentStores.length})</div>
+
+          {agentStores.length === 0 && !agentLoading ? (
+            <div className="empty-state" style={{ marginTop:20 }}>
+              <div className="empty-icon">🏪</div>
+              <div className="empty-title">No stores yet</div>
+              <div className="empty-sub">Register your first store with its link code above.</div>
+            </div>
           ) : (
-            <div className="biz-product-list">
-              {[...supplierProducts].reverse().map(p => {
-                const cat = CATEGORIES.find(c => c.id === p.category);
+            <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+              {agentStores.map(s => {
+                const b = badge(s);
+                const approved = s.approvalStatus === 'approved';
                 return (
-                  <div key={p.id} className="biz-product-item">
-                    <div className="biz-product-icon" style={{ width:40, height:40, borderRadius:6, overflow:'hidden' }}>
-                      <ProductImage imageUrl={p.imageUrl} imageUrls={p.imageUrls} name={p.name} />
+                  <div key={s.id} className="card" style={{ padding:14, borderRadius:12 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                      <div style={{ width:40, height:40, borderRadius:8, overflow:'hidden', flexShrink:0 }}><StoreAvatar value={s.icon} /></div>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontWeight:700, fontSize:'.9rem', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{s.name}</div>
+                        <div style={{ fontSize:'.76rem', color:b.c, fontWeight:600 }}>{b.t}</div>
+                      </div>
+                      <div style={{ textAlign:'right', flexShrink:0 }}>
+                        {s.bountyPaidAt
+                          ? <div style={{ fontSize:'.78rem', color:'var(--success)', fontWeight:700 }}>Paid ${(s.bountyAmount ?? 0).toFixed(2)}</div>
+                          : s.bountyAmount != null
+                            ? <div style={{ fontSize:'.78rem', color:'var(--warning)', fontWeight:700 }}>Owed ${s.bountyAmount.toFixed(2)}</div>
+                            : <div style={{ fontSize:'.72rem', color:'var(--text-muted)' }}>Bounty TBD</div>}
+                        <div style={{ fontSize:'.68rem', color: s.storePaying ? 'var(--success)' : 'var(--text-muted)', marginTop:2 }}>
+                          {s.storePaying ? '● Paying' : '○ Not paying'}
+                        </div>
+                      </div>
                     </div>
-                    <div className="biz-product-info">
-                      <div className="biz-product-name">{p.name}</div>
-                      {p.brand && <div className="biz-product-brand">{p.brand}</div>}
-                      <div className="biz-product-meta">{cat?.icon} {cat?.name}</div>
-                      {p.sku && <div className="biz-product-meta" style={{ color:'var(--text-muted)', fontSize:'.72rem' }}>SKU: {p.sku}</div>}
-                      {p.barcode && <div className="biz-product-meta" style={{ color:'var(--text-muted)', fontSize:'.72rem' }}>🔢 {p.barcode}</div>}
-                    </div>
-                    <div className="biz-product-pricing">
-                      <div className="biz-price-mine">${p.price.toFixed(2)}</div>
-                      <div className={`biz-stock-badge${p.stock < 5 ? ' low' : ''}`}>{p.stock} units</div>
-                      {(p.sold ?? 0) > 0 && (
-                        <div style={{ fontSize:'.72rem', color:'var(--primary)', fontWeight:600 }}>{p.sold} sold</div>
-                      )}
-                    </div>
-                    <div className="biz-product-actions">
-                      <button className="btn btn-ghost btn-sm" onClick={() => openEditProduct(p)} title="Edit">✏️</button>
-                      <button className="btn btn-ghost btn-sm" style={{ color:'var(--danger)' }}
-                        onClick={() => handleDeleteProduct(p.id)} disabled={deletingId === p.id} title="Delete">
-                        {deletingId === p.id ? '…' : '🗑️'}
-                      </button>
-                    </div>
+
+                    {!approved ? (
+                      <div style={{ display:'flex', gap:8, marginTop:12 }}>
+                        <button className="btn btn-outline btn-sm" style={{ flex:1 }} onClick={() => handleSetUpStore(s.id)}>✏️ Set up</button>
+                        <button className="btn btn-primary btn-sm" style={{ flex:1 }} onClick={() => handleSubmitStore(s.id)} disabled={submittingStore === s.id}>
+                          {submittingStore === s.id ? '…' : s.approvalStatus === 'pending' ? '↻ Re-submit' : '📤 Submit for review'}
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ marginTop:10, fontSize:'.76rem', color:'var(--text-muted)' }}>
+                        ✅ Approved — the owner now runs this store. Your setup access has ended.
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           )}
-
-          {/* Activity summary */}
-          {supplierProducts.length > 0 && (
-            <div style={{ marginTop: 24, padding: '14px 16px', background: 'var(--surface)', borderRadius: 12, border: '1px solid var(--border)' }}>
-              <div style={{ fontWeight: 700, fontSize: '.85rem', marginBottom: 10 }}>📊 Registry Summary</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                {[
-                  { label: 'Total Products', value: supplierProducts.length },
-                  { label: 'Total Units',    value: totalUnits.toLocaleString() },
-                  { label: 'Categories',     value: new Set(supplierProducts.map(p => p.category)).size },
-                  { label: 'Avg Price',      value: `$${(supplierProducts.reduce((s,p)=>s+p.price,0)/supplierProducts.length).toFixed(2)}` },
-                ].map(({ label, value }) => (
-                  <div key={label} style={{ padding: '10px 12px', background: 'var(--bg)', borderRadius: 8 }}>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{value}</div>
-                    <div style={{ fontSize: '.72rem', color: 'var(--text-muted)', marginTop: 2 }}>{label}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
-
-        {/* ── Reuse product form modal ────────────────────────── */}
-        {showForm && (
-          <div className="modal-overlay" onClick={() => !savingProd && setShowForm(false)}>
-            <div className="modal-box" style={{ maxHeight:'90vh', overflowY:'auto' }} onClick={e => e.stopPropagation()}>
-              <div className="modal-header">
-                <span>{editingProd ? '✏️ Edit Product' : '➕ Register Product'}</span>
-                <button className="modal-close" onClick={() => setShowForm(false)}>✕</button>
-              </div>
-              <div className="modal-body">
-                <div className="form-group">
-                  <label className="form-label">Product Name *</label>
-                  <input className="form-input" placeholder="e.g. iPhone 15 Pro" value={form.name} onChange={e => pf('name', e.target.value)} />
-                </div>
-
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-                  <div className="form-group">
-                    <label className="form-label">Price ($) *</label>
-                    <input className="form-input" type="number" min="0" step="0.01" value={form.price} onChange={e => pf('price', e.target.value)} />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Original Price ($)</label>
-                    <input className="form-input" type="number" min="0" step="0.01" value={form.originalPrice} onChange={e => pf('originalPrice', e.target.value)} />
-                  </div>
-                </div>
-
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-                  <div className="form-group">
-                    <label className="form-label">Category *</label>
-                    <select className="form-input" value={form.category} onChange={e => { pf('category', e.target.value); pf('subCategory', ''); }}>
-                      {CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
-                    </select>
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Sub-Category</label>
-                    <select className="form-input" value={form.subCategory} onChange={e => pf('subCategory', e.target.value)}>
-                      <option value="">— Select —</option>
-                      {(SUBCATEGORIES[form.category] ?? []).map(s => (
-                        <option key={s.id} value={s.id}>{s.icon} {s.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-                  <div className="form-group">
-                    <label className="form-label">Stock Qty</label>
-                    <input className="form-input" type="number" min="0" value={form.stock} onChange={e => pf('stock', e.target.value)} />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">SKU</label>
-                    <input className="form-input" placeholder="AGT-001" value={form.sku} onChange={e => pf('sku', e.target.value)} />
-                  </div>
-                </div>
-
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-                  <div className="form-group">
-                    <label className="form-label">Brand</label>
-                    <input className="form-input" placeholder="Apple, Samsung…" value={form.brand} onChange={e => pf('brand', e.target.value)} />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Barcode (EAN-13)</label>
-                    <input className="form-input" placeholder="1234567890123" inputMode="numeric" maxLength={14} value={form.barcode} onChange={e => pf('barcode', e.target.value.replace(/\D/g, ''))} />
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Tags <span style={{ color:'var(--text-muted)', fontWeight:400 }}>(comma-separated)</span></label>
-                  <input className="form-input" placeholder="Wireless, USB-C, 5G" value={form.tags} onChange={e => pf('tags', e.target.value)} />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Description</label>
-                  <textarea className="form-input" rows={3} style={{ resize:'vertical', fontFamily:'inherit' }}
-                    placeholder="Product details…" value={form.description} onChange={e => pf('description', e.target.value)} maxLength={500} />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Product Photos
-                    <span style={{ fontWeight:400, color:'var(--text-muted)', marginLeft:6 }}>(up to 8 · first is cover)</span>
-                  </label>
-                  <ProductImageUpload urls={form.imageUrls} onChange={urls => pf('imageUrls', urls)} maxPhotos={8} />
-                </div>
-
-                {form.imageUrls.length > 0 && (
-                  <AiGenerateButton
-                    imageUrl={form.imageUrls[0]}
-                    onResult={result => {
-                      if (result.name)        pf('name',        result.name);
-                      if (result.description) pf('description', result.description);
-                      if (result.brand)       pf('brand',       result.brand);
-                      if (result.category)    pf('category',    result.category);
-                      if (result.subCategory) pf('subCategory', result.subCategory);
-                      if (result.tags?.length) pf('tags', result.tags.join(', '));
-                    }}
-                  />
-                )}
-
-                <button className="btn btn-primary btn-full btn-lg" onClick={handleSaveProduct} disabled={savingProd}>
-                  {savingProd ? 'Saving…' : editingProd ? 'Update Product' : 'Register Product'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     );
   }
@@ -1210,6 +1105,24 @@ export default function ProfilePage() {
   return (
     <div className="page-anim">
       <Header showSearch={false} />
+
+      {/* ── Field-agent "acting as" banner ─────────────────────── */}
+      {actingStore && (
+        <div style={{
+          margin: '10px 16px 0', padding: '10px 14px', borderRadius: 12,
+          background: 'color-mix(in srgb, var(--primary) 12%, transparent)',
+          border: '1px solid var(--primary)', display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <span style={{ fontSize: '1.1rem' }}>🧑‍💼</span>
+          <div style={{ flex: 1, minWidth: 0, fontSize: '.82rem', lineHeight: 1.4 }}>
+            Setting up <strong>{actingStore.name}</strong> as its field agent. Add its profile &amp; products, then submit for review.
+          </div>
+          <button className="btn btn-primary btn-sm" onClick={() => handleSubmitStore(actingStore.id)} disabled={submittingStore === actingStore.id}>
+            {submittingStore === actingStore.id ? '…' : 'Submit'}
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={() => setActingStore(null)}>Exit</button>
+        </div>
+      )}
 
       {/* ── Business Hero Card ─────────────────────────────────── */}
       <div className="biz-hero-card">
@@ -1647,6 +1560,53 @@ export default function ProfilePage() {
                   </div>
                 )}
               </div>
+
+              {/* Field-agent link code — the real owner hands this to a field
+                  agent so they can register + set up the store. Hidden while an
+                  agent is already acting on the store. */}
+              {!actingStore && currentSupplier && (
+                <div className="form-group">
+                  <label className="form-label">
+                    🧑‍💼 Field-agent code
+                    <span style={{ fontWeight:400, color:'var(--text-muted)', marginLeft:6, fontSize:'.78rem' }}>
+                      let an agent set up your store
+                    </span>
+                  </label>
+                  {currentSupplier.registeredByAgentId ? (
+                    <div style={{ padding:'10px 12px', borderRadius:10, background:'var(--surface)', border:'1px solid var(--border)', fontSize:'.82rem', lineHeight:1.5 }}>
+                      ✅ A field agent is registered on your store
+                      {currentSupplier.approvalStatus === 'approved'
+                        ? ' and it has been approved — you now run it yourself.'
+                        : currentSupplier.approvalStatus === 'pending'
+                          ? ' and submitted it for review.'
+                          : ' and is setting it up.'}
+                    </div>
+                  ) : currentSupplier.agentLinkCode ? (
+                    <>
+                      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                        <span style={{ flex:1, fontFamily:'monospace', fontSize:'1.05rem', fontWeight:700, letterSpacing:'.12em', padding:'9px 12px', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:10 }}>
+                          {currentSupplier.agentLinkCode}
+                        </span>
+                        <button type="button" className="btn btn-outline btn-sm" style={{ flexShrink:0 }}
+                          onClick={() => {
+                            navigator.clipboard?.writeText(currentSupplier.agentLinkCode ?? '')
+                              .then(() => toast('Code copied — share it with your field agent', 'success'))
+                              .catch(() => toast('Could not copy', 'error'));
+                          }}>
+                          📋 Copy
+                        </button>
+                      </div>
+                      <div style={{ fontSize:'.76rem', color:'var(--text-muted)', marginTop:6, lineHeight:1.5 }}>
+                        Optional. Give this code to a Hamar Mall field agent and they can register your store and build your profile + products for you. You stay the owner.
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ fontSize:'.78rem', color:'var(--text-muted)' }}>
+                      Available after the next update.
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="form-group">
                 <label className="form-label">Bio / Description</label>

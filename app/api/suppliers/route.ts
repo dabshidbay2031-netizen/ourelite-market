@@ -59,7 +59,22 @@ function mapSupplier(s: Record<string, unknown>) {
     subscriptionRefundedAt: (s.subscription_refunded_at as string | undefined) ?? null,
     subscriptionPlan:       (s.subscription_plan as string | undefined) ?? null,
     subscriptionAmount:     s.subscription_amount != null ? Number(s.subscription_amount) : null,
+    /* Field-agent onboarding (migration_v3_9) — absent columns map to null.
+       agentLinkCode / bounty are stripped from PUBLIC lists (see GET). */
+    registeredByAgentId:    (s.registered_by_agent_id as number | undefined) ?? null,
+    agentLinkCode:          (s.agent_link_code as string | undefined) ?? null,
+    agentSubmittedAt:       (s.agent_submitted_at as string | undefined) ?? null,
+    agentBountyAmount:      s.agent_bounty_amount != null ? Number(s.agent_bounty_amount) : null,
+    agentBountyPaidAt:      (s.agent_bounty_paid_at as string | undefined) ?? null,
   };
+}
+
+/** The agent link code is an actionable secret — knowing it lets an agent
+ *  register the store — so it's stripped from the public storefront list. (The
+ *  bounty amount is low-sensitivity and stays, so the admin dashboard, which
+ *  reads this same list, can display and edit it.) */
+function stripPrivateAgentFields<T extends Record<string, unknown>>(m: T): T {
+  return { ...m, agentLinkCode: null };
 }
 
 export async function GET(req: Request) {
@@ -73,7 +88,7 @@ export async function GET(req: Request) {
       const { data } = await getSupabaseAdmin()
         .from('suppliers').select('*')
         .eq('slug', slug.toLowerCase()).maybeSingle();
-      if (data) return NextResponse.json(mapSupplier(data as Record<string, unknown>));
+      if (data) return NextResponse.json(stripPrivateAgentFields(mapSupplier(data as Record<string, unknown>)));
     } catch { /* table may not have a slug column yet */ }
     return NextResponse.json(null, { status: 404 });
   }
@@ -88,7 +103,12 @@ export async function GET(req: Request) {
     const headers = authUserId
       ? { 'Cache-Control': 'private, no-store' }
       : { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600' };
-    return jsonWithEtag(req, data.map(mapSupplier), headers);
+    // The owner's own fetch (authUserId) keeps its link code + bounty; the
+    // public storefront list never exposes them.
+    const mapped = authUserId
+      ? data.map(mapSupplier)
+      : data.map(d => stripPrivateAgentFields(mapSupplier(d as Record<string, unknown>)));
+    return jsonWithEtag(req, mapped, headers);
   } catch {
     return NextResponse.json([]);
   }
@@ -132,6 +152,12 @@ export async function POST(req: Request) {
   // Every new store gets a clean shareable link (<domain>/<slug>) from day one
   const autoSlug = await generateUniqueSlug(String(name));
 
+  // Sellable stores get a link code to hand to a field agent (agents/customers
+  // don't onboard other stores, so they get none). 8 hex chars, upper-cased.
+  const agentLinkCode = baseFields.account_type === 'agent'
+    ? null
+    : Math.random().toString(16).slice(2, 10).toUpperCase().padEnd(8, '0');
+
   // Compute next safe ID to work around a potentially broken SERIAL sequence
   const { data: maxRow } = await getSupabaseAdmin()
     .from('suppliers').select('id').order('id', { ascending: false }).limit(1).maybeSingle();
@@ -140,16 +166,19 @@ export async function POST(req: Request) {
   // Phase 1: full insert with auth_user_id and explicit id
   try {
     const newSupplier: Record<string, unknown> = { ...baseFields, id: nextId };
-    if (autoSlug)   newSupplier.slug = autoSlug;
-    if (authUserId) newSupplier.auth_user_id = authUserId;
-    if (onlineOnly) newSupplier.online_only = true;
+    if (autoSlug)       newSupplier.slug = autoSlug;
+    if (authUserId)     newSupplier.auth_user_id = authUserId;
+    if (onlineOnly)     newSupplier.online_only = true;
+    if (agentLinkCode)  newSupplier.agent_link_code = agentLinkCode;
 
     let { data, error } = await getSupabaseAdmin()
       .from('suppliers').insert(newSupplier).select().single();
-    // Pre-migration schema without a slug / online_only column — retry without them
+    // Pre-migration schema without a slug / online_only / agent_link_code column
+    // — retry without the newer columns
     if (error && isMissingColumnError(error)) {
       delete newSupplier.slug;
       delete newSupplier.online_only;
+      delete newSupplier.agent_link_code;
       ({ data, error } = await getSupabaseAdmin()
         .from('suppliers').insert(newSupplier).select().single());
     }

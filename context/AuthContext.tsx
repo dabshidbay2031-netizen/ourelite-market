@@ -24,6 +24,15 @@ interface AuthContextValue {
   signOut:         () => Promise<void>;
   refreshAccount:  () => Promise<void>;
   updateProfile:   (data: Partial<Pick<UserProfile, 'fullName' | 'phone' | 'avatar' | 'avatarUrl' | 'bio'>>) => Promise<void>;
+  /* ── Field-agent "acting as store" ──────────────────────────────
+     When a field agent is setting up a store they registered, they select it
+     here. While set, `currentSupplier` + `accountType` reflect that STORE, so
+     the whole business UI (profile edit, inventory, POS) scopes to it — the
+     server still authorizes every write via agentManagesStore. `agentSelf` is
+     the agent's OWN store row, kept so the agent dashboard still works. */
+  actingStore:     Supplier | null;
+  setActingStore:  (s: Supplier | null) => void;
+  agentSelf:       Supplier | null;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -65,6 +74,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [accountType,     setAccountType]     = useState<AccountType | null>(null);
   const [loading,         setLoading]         = useState(true);
   const [configError,     setConfigError]     = useState<string | null>(null);
+  // A field agent's currently-selected store to set up (in-memory; a reload
+  // drops back to the agent's own dashboard, which is fine).
+  const [actingStore,     setActingStore]     = useState<Supplier | null>(null);
 
   const lastResolvedUid = useRef<string | null>(null);
   // Ref mirror of accountType: the auth listener is registered once with
@@ -199,6 +211,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (activeUidRef.current !== (effective?.id ?? null)) {
       cancelResolveRetry();
       lastResolvedUid.current = null;
+      setActingStore(null); // never carry an agent's acting-store across accounts
     }
     activeUidRef.current = effective?.id ?? null;
 
@@ -272,6 +285,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     cancelResolveRetry();
     lastResolvedUid.current = null;
     activeUidRef.current    = null;
+    setActingStore(null);
     setUser(null); setCurrentSupplier(null); setCurrentProfile(null); applyAccountType(null);
     clearCachedAccount();
     try {
@@ -339,10 +353,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
   }
 
+  // While a field agent is acting on a store they registered, the whole app
+  // sees that STORE as the current supplier (business experience). Otherwise the
+  // real resolved values pass through unchanged.
+  const effectiveSupplier   = actingStore ?? currentSupplier;
+  const effectiveAccountType: AccountType | null =
+    actingStore ? ((actingStore.accountType as AccountType | undefined) ?? 'business') : accountType;
+  const agentSelf = accountType === 'agent' ? currentSupplier : null;
+
   return (
     <AuthContext.Provider value={{
-      user, loading, accountType, currentSupplier, currentProfile,
+      user, loading,
+      accountType:     effectiveAccountType,
+      currentSupplier: effectiveSupplier,
+      currentProfile,
       signOut, refreshAccount, updateProfile,
+      actingStore, setActingStore, agentSelf,
     }}>
       {children}
     </AuthContext.Provider>

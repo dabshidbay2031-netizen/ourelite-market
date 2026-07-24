@@ -84,6 +84,14 @@ export interface Supplier {
   approvalStatus?:      'trial' | 'pending' | 'approved' | 'rejected' | null;
   trialStartedAt?:      string | null;
   approvalRequestedAt?: string | null;
+  /* Field-agent onboarding (migration_v3_9). A store is either self-registered
+     (registeredByAgentId null) or was signed up by a field agent who set it up
+     during trial/pending and is paid a fixed bounty once it's approved+paying. */
+  registeredByAgentId?: number | null;   // the agent (supplier id) who onboarded this store
+  agentLinkCode?:       string | null;   // code the OWNER hands to an agent (owner/admin only)
+  agentSubmittedAt?:    string | null;   // when the agent submitted it for review
+  agentBountyAmount?:   number | null;   // fixed bounty the admin agreed to pay the agent
+  agentBountyPaidAt?:   string | null;   // when the admin paid that bounty
   /* Subscription billing (absent on pre-migration schemas) */
   billingEnabled?:         boolean;   // false = billing columns not deployed yet
   subscriptionPaidAt?:     string | null;

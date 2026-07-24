@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
-import { requireStaff } from '@/lib/apiAuth';
+import { requireStaff, requireSupplierAccess } from '@/lib/apiAuth';
 import { errMsg, isMissingColumnError, isForeignKeyError, jsonWithEtag } from '@/lib/apiHelpers';
 import { pingRealtime } from '@/lib/realtimeServer';
 import { similarProducts } from '@/lib/similarity';
@@ -165,6 +165,16 @@ export async function POST(req: Request) {
 
   if (!name || !price || !category) {
     return NextResponse.json({ error: 'name, price, and category are required' }, { status: 400 });
+  }
+
+  // Store-scope the create: a product attributed to a store may only be made by
+  // that store's owner / staff / admin, or the field agent currently setting it
+  // up. Without this, requireStaff alone let ANY seller stuff a product into a
+  // rival's store by spoofing supplierId (and it's what lets an agent add
+  // products to the store they onboarded).
+  if (supplierId) {
+    const denied = await requireSupplierAccess(req, parseInt(String(supplierId), 10), 'inventory_edit');
+    if (denied) return denied;
   }
 
   const fullProduct: Record<string, unknown> = {

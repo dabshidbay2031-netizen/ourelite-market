@@ -301,6 +301,18 @@ export default function AdminDashboard() {
     rejected: { label: '🚫 Rejected',     color: '#EF4444' },
   };
 
+  /* ── Field-agent bounty (fixed amount, paid manually) ──────────── */
+  const setBounty = async (storeId: number, patch: { amount?: number; paid?: boolean }) => {
+    const res = await fetch('/api/agent/bounty', {
+      method:'PATCH', headers: await authHeaders({ 'Content-Type':'application/json' }),
+      body: JSON.stringify({ storeId, ...patch }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (res.ok) { toast(patch.paid === true ? 'Marked paid ✓' : patch.paid === false ? 'Marked unpaid' : 'Bounty saved ✓', 'success'); load('businesses'); }
+    else        { toast(d.error ?? 'Failed', 'error'); }
+  };
+  const [bountyDraft, setBountyDraft] = useState<Record<number, string>>({});
+
   /* ── Product edit ──────────────────────────────────────────────── */
   const saveProd = async () => {
     if (!editProd) return;
@@ -566,6 +578,11 @@ export default function AdminDashboard() {
                                   {APPROVAL_BADGE[b.approvalStatus]?.label}
                                 </div>
                               )}
+                              {b.registeredByAgentId != null && (
+                                <div style={{ color:'#8B5CF6', fontWeight:600, fontSize:'.74rem', marginTop:3 }}>
+                                  🧑‍💼 Agent #{b.registeredByAgentId}
+                                </div>
+                              )}
                             </td>
                             {isAdmin && (
                               <td style={td}>
@@ -582,6 +599,42 @@ export default function AdminDashboard() {
                                   </button>
                                   <button className="btn btn-ghost btn-sm" style={{ color:'var(--danger)' }} onClick={() => deleteBiz(b.id, b.name)}>🗑️</button>
                                 </div>
+
+                                {/* Field-agent bounty — only for agent-registered stores */}
+                                {b.registeredByAgentId != null && (
+                                  <div style={{ marginTop:8, padding:'8px 10px', borderRadius:8, background:'var(--surface)', border:'1px dashed var(--border)' }}>
+                                    <div style={{ fontSize:'.72rem', color:'var(--text-muted)', marginBottom:6 }}>
+                                      Agent bounty · store {b.subscriptionPaidAt && !b.subscriptionRefundedAt
+                                        ? <span style={{ color:'#10B981', fontWeight:600 }}>paying ●</span>
+                                        : <span style={{ color:'var(--text-muted)', fontWeight:600 }}>not paying ○</span>}
+                                    </div>
+                                    <div style={{ display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
+                                      <span style={{ fontSize:'.8rem' }}>$</span>
+                                      <input
+                                        className="form-input" type="number" min="0" step="0.01"
+                                        style={{ width:80, padding:'4px 8px', fontSize:'.8rem' }}
+                                        placeholder={b.agentBountyAmount != null ? String(b.agentBountyAmount) : '0.00'}
+                                        value={bountyDraft[b.id] ?? ''}
+                                        onChange={e => setBountyDraft(d => ({ ...d, [b.id]: e.target.value }))}
+                                      />
+                                      <button className="btn btn-secondary btn-sm"
+                                        onClick={() => setBounty(b.id, { amount: Number(bountyDraft[b.id] ?? b.agentBountyAmount ?? 0) })}>
+                                        Set
+                                      </button>
+                                      {b.agentBountyPaidAt
+                                        ? <button className="btn btn-ghost btn-sm" onClick={() => setBounty(b.id, { paid: false })}>↩ Unpay</button>
+                                        : <button className="btn btn-primary btn-sm"
+                                            disabled={b.agentBountyAmount == null || !(b.subscriptionPaidAt && !b.subscriptionRefundedAt)}
+                                            title={!(b.subscriptionPaidAt && !b.subscriptionRefundedAt) ? 'Store must be paying first' : b.agentBountyAmount == null ? 'Set an amount first' : 'Mark the bounty paid'}
+                                            onClick={() => setBounty(b.id, { paid: true })}>💵 Mark paid</button>}
+                                    </div>
+                                    {b.agentBountyPaidAt && (
+                                      <div style={{ fontSize:'.7rem', color:'#10B981', marginTop:4 }}>
+                                        ✓ Paid ${(b.agentBountyAmount ?? 0).toFixed(2)}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                               </td>
                             )}
                           </tr>

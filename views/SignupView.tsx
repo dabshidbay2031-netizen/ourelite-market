@@ -254,7 +254,7 @@ export default function SignupPage() {
                   <button className={`acct-type-btn ${acctType === 'agent' ? 'active' : ''}`} onClick={() => setAcctType('agent')}>
                     <span className="acct-type-icon">📋</span>
                     <span className="acct-type-label">Field Agent</span>
-                    <span className="acct-type-sub">Register products in the catalog</span>
+                    <span className="acct-type-sub">Sign up stores &amp; earn per store</span>
                   </button>
                 </div>
                 <div style={{ padding: '0 20px', display: 'flex', gap: 10 }}>
