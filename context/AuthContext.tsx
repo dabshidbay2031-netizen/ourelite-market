@@ -71,6 +71,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // [] deps, so reading the STATE here would always see the first render's
   // null (stale closure) and the early-exit below could never fire.
   const accountTypeRef  = useRef<AccountType | null>(null);
+  // The uid we currently consider "active" — a queued retry aborts if the
+  // signed-in user has changed since it was scheduled.
+  const activeUidRef    = useRef<string | null>(null);
+  // Pending retry timer for an inconclusive (network-failed) resolve.
+  const resolveTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function cancelResolveRetry() {
+    if (resolveTimer.current) { clearTimeout(resolveTimer.current); resolveTimer.current = null; }
+  }
 
   /** Keep the state and the ref in lockstep */
   function applyAccountType(t: AccountType | null) {
@@ -78,61 +86,121 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAccountType(t);
   }
 
-  /* ── Look up Supabase profile / supplier by UID ──────────────── */
-  async function resolveAccount(uid: string, sbUser?: SbUser) {
-    if (lastResolvedUid.current === uid && accountTypeRef.current) return; // already resolved
-    lastResolvedUid.current = uid;
-    try {
-      const res  = await fetch(`/api/suppliers?authUserId=${uid}`);
-      const data = await res.json();
-      const sup  = Array.isArray(data) ? data[0] ?? null : null;
-      if (sup) {
-        setCurrentSupplier(sup);
-        setCurrentProfile(null);
-        const t = sup.accountType === 'supplier' ? 'supplier' : sup.accountType === 'agent' ? 'agent' : 'business';
-        applyAccountType(t as AccountType);
-        writeCachedAccount(uid, t as AccountType);
-        return;
-      }
-    } catch { /* ignore */ }
-    try {
-      const res  = await fetch(`/api/profile?userId=${encodeURIComponent(uid)}`);
-      const data = await res.json();
-      if (data?.id) { setCurrentProfile(data); setCurrentSupplier(null); applyAccountType('user'); writeCachedAccount(uid, 'user'); return; }
-    } catch { /* ignore */ }
+  /* ── Look up Supabase profile / supplier by UID ──────────────────
+     The store's `suppliers` row is the AUTHORITATIVE source of the account
+     type: editing `suppliers.account_type` in Supabase (business/supplier/
+     agent) must flip the profile the user sees on the next load. So we always
+     re-read it fresh (`no-store`) and map it directly.
 
-    // No profile or supplier found — auto-create a profile so the user is
-    // never left in a broken "no account type" state after signing up.
-    if (sbUser) {
-      try {
-        const res = await fetch('/api/profile', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id:       uid,
-            fullName: (sbUser.user_metadata?.full_name as string | undefined) ?? sbUser.email ?? '',
-            phone:    sbUser.phone ?? '',
-            avatar:   '👤',
-          }),
-        });
-        if (res.ok) {
-          const profile = await res.json();
-          setCurrentProfile(profile);
-          setCurrentSupplier(null);
-          applyAccountType('user');
-          writeCachedAccount(uid, 'user');
+     The golden rule here is DON'T DOWNGRADE ON A NETWORK BLIP. A failed
+     (timeout / 5xx / offline) supplier lookup used to fall through and
+     auto-create a *customer* profile — permanently turning a business into a
+     'user' and making the role flip-flop between reloads. We now only ever
+     change the role from a CONCLUSIVE answer (an HTTP-200 body); an
+     inconclusive lookup keeps the current role and schedules a retry. */
+  async function resolveAccount(uid: string, sbUser?: SbUser, attempt = 0) {
+    // Skip when we already have a DEFINITIVE resolution for this uid (a prior
+    // call — or a parallel auth event — already settled it). `refreshAccount`
+    // clears lastResolvedUid to force a fresh read past this guard.
+    if (lastResolvedUid.current === uid && accountTypeRef.current) return;
+
+    // ── 1) Supplier lookup — authoritative for business / supplier / agent ──
+    let supplierConclusive = false; // 200 response we can trust (row or empty)
+    try {
+      const res = await fetch(`/api/suppliers?authUserId=${encodeURIComponent(uid)}`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        const sup  = Array.isArray(data) ? data[0] ?? null : null;
+        if (sup) {
+          const t: AccountType = sup.accountType === 'supplier' ? 'supplier'
+                               : sup.accountType === 'agent'    ? 'agent'
+                               :                                  'business';
+          setCurrentSupplier(sup);
+          setCurrentProfile(null);
+          applyAccountType(t);
+          writeCachedAccount(uid, t);
+          lastResolvedUid.current = uid;      // definitive
+          cancelResolveRetry();
           return;
         }
-      } catch { /* ignore — fall through to null state */ }
+        supplierConclusive = true;            // 200 + no row ⇒ genuinely not a store
+      }
+      // non-2xx ⇒ inconclusive; fall through to the retry path below
+    } catch { /* network / timeout ⇒ inconclusive */ }
+
+    // ── 2) Profile lookup — only meaningful once we KNOW there's no store row ──
+    if (supplierConclusive) {
+      let profileConclusive = false;
+      try {
+        const res = await fetch(`/api/profile?userId=${encodeURIComponent(uid)}`, { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.id) {
+            setCurrentProfile(data);
+            setCurrentSupplier(null);
+            applyAccountType('user');
+            writeCachedAccount(uid, 'user');
+            lastResolvedUid.current = uid;    // definitive
+            cancelResolveRetry();
+            return;
+          }
+          profileConclusive = true;           // 200 + no row ⇒ brand-new user
+        }
+      } catch { /* inconclusive */ }
+
+      // ── 3) Genuinely new account (no store, no profile) — create a customer
+      //    profile so signup lands somewhere. Reached ONLY when BOTH lookups
+      //    returned a conclusive "nothing", so a blip can never trigger it. ──
+      if (profileConclusive && sbUser) {
+        try {
+          const res = await fetch('/api/profile', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id:       uid,
+              fullName: (sbUser.user_metadata?.full_name as string | undefined) ?? sbUser.email ?? '',
+              phone:    sbUser.phone ?? '',
+              avatar:   '👤',
+            }),
+          });
+          if (res.ok) {
+            const profile = await res.json();
+            setCurrentProfile(profile);
+            setCurrentSupplier(null);
+            applyAccountType('user');
+            writeCachedAccount(uid, 'user');
+            lastResolvedUid.current = uid;    // definitive
+            cancelResolveRetry();
+            return;
+          }
+        } catch { /* fall through to retry */ }
+      }
     }
 
-    setCurrentSupplier(null); setCurrentProfile(null); applyAccountType(null);
-    clearCachedAccount();
+    // ── Inconclusive: a lookup failed. Keep the current role (never downgrade)
+    //    and retry a few times so a momentary blip can't flip the profile. We
+    //    deliberately DON'T set lastResolvedUid, so a later auth event resolves
+    //    too. ──
+    cancelResolveRetry();
+    if (attempt < 3 && activeUidRef.current === uid) {
+      resolveTimer.current = setTimeout(() => {
+        if (activeUidRef.current === uid) resolveAccount(uid, sbUser, attempt + 1);
+      }, 1200 * (attempt + 1));
+    }
   }
 
   /* ── Apply the current Supabase session ───────────────────────── */
   function applySession(sbUser: SbUser | null) {
     const effective = sbUser ? toSupabaseUser(sbUser) : null;
+
+    // A different (or absent) user invalidates any in-flight resolve retry and
+    // the last-resolved marker — otherwise a queued retry for the old uid could
+    // stamp the wrong role onto the new session.
+    if (activeUidRef.current !== (effective?.id ?? null)) {
+      cancelResolveRetry();
+      lastResolvedUid.current = null;
+    }
+    activeUidRef.current = effective?.id ?? null;
 
     setUser(prev => {
       // Avoid needless re-renders / re-resolves when nothing changed
@@ -178,19 +246,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       applySession(session?.user ?? null);
     });
 
+    // Belt-and-suspenders: proactively read the persisted session on mount.
+    // onAuthStateChange fires INITIAL_SESSION for this, but on a slow/flaky
+    // network that event can lag — reading it directly guarantees a freshly
+    // reloaded (or just-logged-in) user resolves instead of getting stranded on
+    // the "Sign in required" screen. applySession de-dupes by uid, so this is
+    // harmless if the event already fired.
+    sb.auth.getSession()
+      .then(({ data }) => applySession(data.session?.user ?? null))
+      .catch(() => setLoading(false));
+
     // Safety: never let the UI hang on loading more than 8s
     const timeout = setTimeout(() => setLoading(false), 8000);
 
     return () => {
       subscription.unsubscribe();
       clearTimeout(timeout);
+      cancelResolveRetry();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── Sign out ────────────────────────────────────────────────── */
   const signOut = async () => {
     // Clear local state immediately so the UI reflects the sign-out at once
+    cancelResolveRetry();
     lastResolvedUid.current = null;
+    activeUidRef.current    = null;
     setUser(null); setCurrentSupplier(null); setCurrentProfile(null); applyAccountType(null);
     clearCachedAccount();
     try {
@@ -205,6 +286,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   /* ── Refresh account data ────────────────────────────────────── */
   const refreshAccount = async () => {
     if (!user) return;
+    cancelResolveRetry();
     lastResolvedUid.current = null; // force re-resolve
     const { data: { user: sbUser } } = await getSupabase().auth.getUser();
     await resolveAccount(user.id, sbUser ?? undefined);
